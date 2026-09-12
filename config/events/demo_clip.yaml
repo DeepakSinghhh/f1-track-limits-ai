@@ -1,0 +1,27 @@
+# Placeholder Event Notes for the CV hackathon demo pipeline (app.py).
+# Unlike red_bull_ring_2023.yaml, this does NOT describe a real circuit:
+# the demo detects vehicles against a fixed illustrative screen-space
+# zone, not a calibrated track boundary, so there is exactly one "corner"
+# (0) standing in for "the zone drawn on this clip". This file exists so
+# the demo runs through the same deterministic rule engine as everything
+# else, rather than special-casing the pipeline -- it does not claim to
+# be circuit-accurate.
+circuit: demo_clip
+year: 2024
+
+monitored_corners: [0]
+white_line_width_m: 0.10
+
+measurement:
+  min_event_duration_s: 0.150
+
+escalation:
+  black_and_white_flag_at: 3
+  first_penalty_at: 4
+  first_penalty_seconds: 5
+  second_penalty_at: 5
+  second_penalty_seconds: 10
+
+citations:
+  core_rule: "F1SR Art. 33.3"
+  guidelines: "FIA Driving Standards Guidelines v4.1"

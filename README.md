@@ -86,7 +86,7 @@ agent, trust/calibration, the steward console) sits on top of:
   adapter needed — the payoff of fixing data contracts before any tier.
 
 Run the tests: `pip install -r requirements.txt && python3 -m pytest`
-(74 tests, including the five Section 5.6 requires verbatim and the
+(87 tests, including the five Section 5.6 requires verbatim and the
 Section 5.1 round-trip acceptance criterion).
 
 ### Where Tier 2's determinism ends on purpose
@@ -114,8 +114,47 @@ present measurement. The only Tier 2-level abstention is missing data.
   export and the steward console.
 - `src/eval/` — FIA decision scraping and metrics.
 
-`app.py` and `src/detector.py`/`src/geofence.py`/`src/kinematics.py`/
-`src/calibration.py` are the pre-existing hackathon demo; they predate
-this core layer and are not yet wired to it — in particular the demo
-still auto-applies penalties and reports a fixed fake confidence number,
-both explicitly on the Section 8 anti-goals list for the real system.
+## The CV demo pipeline (`app.py`, `src/detector.py`, `src/geofence.py`)
+
+Originally a self-contained hackathon demo that violated most of Section
+0/8 directly: it auto-applied strikes and a "5s PENALTY" from a bare
+frame counter, displayed a hardcoded fake confidence ("94.2%") and a
+fabricated trajectory chart, and had UI controls (a circuit dropdown, a
+confidence slider, a debounce slider) that did nothing. It has been
+rewired onto the real core above rather than patched in place:
+
+- `src/geofence.py`'s `ZoneCrossingTracker` replaced the auto-striking
+  `TrackLimitTracker` — it only turns a per-frame zone-crossing boolean
+  into a candidate `ExcursionEvent` (hysteresis + duration gate, same
+  shape as `events/localise.py`), and touches no strike state. The dead,
+  unused `GeofenceEngine` class (a hardcoded polygon nothing called) was
+  deleted.
+- `src/detector.py` now loads a real `EventConfig`
+  (`config/events/demo_clip.yaml`) and runs every candidate event through
+  the actual `RuleEngine`. It also fixed a real bug: the old code called
+  `tracker.update()` once per detected box per frame into one shared
+  tracker, so multiple vehicles in frame corrupted each other's state;
+  the confidence-threshold slider was wired up but never read.
+- Because this pipeline detects one reference point per vehicle (a
+  bounding-box bottom-centre), not per-wheel contact patches — exactly
+  what Section 5.3 calls "indefensible under questioning" — every
+  candidate event honestly carries `wheels_off_peak = None`. The same
+  `RuleEngine` that handles this everywhere else correctly reports
+  `INSUFFICIENT_EVIDENCE` for it, rather than the pipeline asserting a
+  violation it has no contact-patch evidence for.
+- `app.py` no longer shows any fabricated number. It runs detection into
+  a steward review queue — each candidate event shows its real citations
+  and `exceptions_evaluated` — and strikes move only when a steward clicks
+  **Confirm Violation**, via `EscalationEngine.increment_strike` and
+  `OverrideLog`, exactly as everywhere else in this project. The sidebar
+  states the pipeline's real limitations (illustrative zone, no contact
+  patches) instead of implying calibrated precision it doesn't have.
+  `tests/test_pipeline_demo_to_rules.py` checks the abstain behavior
+  end-to-end.
+
+`src/kinematics.py` and `src/calibration.py` were already dead code (never
+imported by `app.py` or `src/detector.py`) before this pass and remain so
+— left alone rather than wired in, since making them load-bearing would
+mean building the real per-clip calibration flow Section 5.3 describes
+(an interactive 4-point tool), not hardcoding one clip's homography as if
+it applied to any uploaded video.
