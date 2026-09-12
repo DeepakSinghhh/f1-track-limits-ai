@@ -1,12 +1,17 @@
-"""One real call to the Anthropic API, proving the Tier 3 integration
-actually works end-to-end (tool dispatch + the structured-output final
-pass) rather than only against a scripted fake client. Skipped whenever
-no API key is configured -- this is the only test in the suite that
-costs money or needs network access, by design.
+"""One real call to the Groq API, proving the Tier 3 integration actually
+works end-to-end (tool dispatch + the JSON-mode final pass) rather than
+only against a scripted fake client. Skipped whenever no API key is
+configured -- this is the only test in the suite that costs money or
+needs network access, by design.
+
+Note: this sandbox's egress policy blocks api.groq.com, so this test has
+only been confirmed to skip cleanly here, not to pass against the real
+API. Run it with GROQ_API_KEY set outside this sandbox to actually
+validate the integration.
 """
 import os
 
-import anthropic
+import groq
 import pytest
 
 from src.agent.reason import reason_about_finding
@@ -19,8 +24,8 @@ from tests.factories import make_event
 CONFIG_PATH = "config/events/red_bull_ring_2023.yaml"
 
 pytestmark = pytest.mark.skipif(
-    not os.environ.get("ANTHROPIC_API_KEY"),
-    reason="ANTHROPIC_API_KEY not set -- skipping the one live-API test",
+    not os.environ.get("GROQ_API_KEY"),
+    reason="GROQ_API_KEY not set -- skipping the one live-API test",
 )
 
 
@@ -30,7 +35,7 @@ def test_reason_about_finding_against_the_real_api():
     finding, verdict = engine.evaluate(event)
     assert verdict == Verdict.VIOLATION  # sanity check on the fixture itself
 
-    client = anthropic.Anthropic()
+    client = groq.Groq()
     context = AgentContext(config=load_event_config(CONFIG_PATH))
 
     result = reason_about_finding(

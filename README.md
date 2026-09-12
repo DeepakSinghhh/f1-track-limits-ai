@@ -139,24 +139,46 @@ agent, trust/calibration, the steward console) sits on top of:
   within-session nearest-neighbour store over a plain feature vector — no
   training, no vector DB, just Euclidean distance over a handful of
   floats. `reason.py` runs a two-phase call: an ordinary tool-use loop for
-  research, then one final call with no tools but a **required JSON
-  schema** covering all six mandatory template fields (finding, case for,
+  research, then one final call with no tools but a required JSON
+  response covering all six mandatory template fields (finding, case for,
   case against, missing evidence, precedents, recommendation) — "this
-  template is a safety control, not a formatting preference" is enforced
-  by the schema itself, not by hoping the model follows a text template.
-  A response that doesn't parse raises `MalformedAgentOutput` rather than
-  silently downgrading to a guessed verdict. Model: `claude-opus-5`.
-  Validated two ways: 25 tests against a scripted fake client covering
-  tool dispatch, tool errors, the iteration cap, and every malformed-
-  output path with no network calls; plus one real end-to-end call in
-  `tests/test_agent_live.py`, skipped automatically when
-  `ANTHROPIC_API_KEY` isn't set. That call did reach the API correctly
-  authenticated — it failed on an account billing check ("credit balance
-  too low"), not the integration, so the live test is ready and will pass
-  once the key has credit.
+  template is a safety control, not a formatting preference." A response
+  that doesn't parse raises `MalformedAgentOutput` rather than silently
+  downgrading to a guessed verdict.
+
+  **Provider: Groq** (project choice, not the "Claude via API" the plan
+  text names) via its OpenAI-compatible chat-completions API — model
+  `llama-3.3-70b-versatile`, unverified against Groq's current catalog
+  (see the module docstring). Two real differences from an
+  Anthropic-shaped implementation, both handled explicitly rather than
+  papered over: tool call arguments arrive as a JSON *string*
+  (`json.loads`-ed per call, with malformed JSON caught and reported back
+  to the model rather than crashing the loop), and Groq's
+  `response_format={"type": "json_object"}` guarantees valid JSON but not
+  which keys are present — so the mandatory-template guarantee is
+  enforced by strict client-side validation after the call instead of a
+  server-side schema.
+
+  Validated two ways: 27 tests against a scripted fake client covering
+  tool dispatch, tool argument parsing, tool errors, the iteration cap,
+  and every malformed-output path, with no network calls — writing them
+  caught a real aliasing bug: `reason_about_finding` was mutating one
+  shared `messages` list throughout, so any earlier API call's recorded
+  arguments would appear (to a test, or a real logging/audit consumer)
+  mutated by everything that happened *after* that call — fixed by
+  passing a snapshot copy into every `create()` call. Plus one real
+  end-to-end call in `tests/test_agent_live.py`, skipped automatically
+  without `GROQ_API_KEY`. Unlike the Anthropic version this replaced,
+  that call could not be run even once from this sandbox — `api.groq.com`
+  is blocked by the environment's egress policy (confirmed directly: a
+  bare `curl` to it gets the same proxy rejection as the blocked
+  `fia.com`/`ergast.com` hosts elsewhere in this README) — so only the
+  skip path itself is confirmed, not a real pass. Needs to be run with a
+  reachable network and a funded key before this is trusted in
+  production.
 
 Run the tests: `pip install -r requirements.txt && python3 -m pytest`
-(153 tests + 1 skipped without an API key, including the five Section 5.6
+(155 tests + 1 skipped without an API key, including the five Section 5.6
 requires verbatim and the Section 5.1 round-trip acceptance criterion).
 
 ### Where Tier 2's determinism ends on purpose

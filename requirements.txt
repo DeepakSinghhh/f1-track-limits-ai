@@ -8,4 +8,4 @@ pytest
 fastapi
 uvicorn
 httpx
-anthropic
+groq

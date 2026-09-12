@@ -21,20 +21,36 @@ VALID_ANSWER = {
 }
 
 
-class FakeBlock:
-    def __init__(self, type, **kwargs):
-        self.type = type
-        for k, v in kwargs.items():
-            setattr(self, k, v)
+class FakeFunctionCall:
+    def __init__(self, name, arguments):
+        self.name = name
+        self.arguments = arguments  # a JSON string, matching the real API
+
+
+class FakeToolCall:
+    def __init__(self, id, name, arguments_dict):
+        self.id = id
+        self.function = FakeFunctionCall(name, json.dumps(arguments_dict))
+
+
+class FakeMessage:
+    def __init__(self, content=None, tool_calls=None):
+        self.content = content
+        self.tool_calls = tool_calls
+
+
+class FakeChoice:
+    def __init__(self, finish_reason, message):
+        self.finish_reason = finish_reason
+        self.message = message
 
 
 class FakeResponse:
-    def __init__(self, stop_reason, content):
-        self.stop_reason = stop_reason
-        self.content = content
+    def __init__(self, finish_reason, message):
+        self.choices = [FakeChoice(finish_reason, message)]
 
 
-class FakeMessages:
+class FakeCompletions:
     def __init__(self, responses):
         self._responses = list(responses)
         self.calls = []
@@ -46,17 +62,25 @@ class FakeMessages:
         return self._responses.pop(0)
 
 
+class FakeChat:
+    def __init__(self, responses):
+        self.completions = FakeCompletions(responses)
+
+
 class FakeClient:
     def __init__(self, responses):
-        self.messages = FakeMessages(responses)
+        self.chat = FakeChat(responses)
 
 
-def text_response(text, stop_reason="end_turn"):
-    return FakeResponse(stop_reason=stop_reason, content=[FakeBlock("text", text=text)])
+def text_response(text, finish_reason="stop"):
+    return FakeResponse(finish_reason=finish_reason, message=FakeMessage(content=text))
 
 
-def tool_use_response(name, input, tool_use_id="tool-1"):
-    return FakeResponse(stop_reason="tool_use", content=[FakeBlock("tool_use", name=name, input=input, id=tool_use_id)])
+def tool_call_response(name, arguments_dict, tool_call_id="tool-1"):
+    return FakeResponse(
+        finish_reason="tool_calls",
+        message=FakeMessage(content=None, tool_calls=[FakeToolCall(tool_call_id, name, arguments_dict)]),
+    )
 
 
 def make_context():
@@ -80,52 +104,63 @@ def test_no_tool_calls_returns_parsed_reasoning():
     assert result.recommendation == Verdict.VIOLATION
     assert result.case_for_violation == VALID_ANSWER["case_for_violation"]
     assert result.case_against == VALID_ANSWER["case_against"]
-    assert len(client.messages.calls) == 2
+    assert len(client.chat.completions.calls) == 2
 
 
-def test_final_call_has_no_tools_and_a_required_schema():
+def test_final_call_has_no_tools_and_requests_json_mode():
     client = FakeClient([
         text_response("done"),
         text_response(json.dumps(VALID_ANSWER)),
     ])
     reason_about_finding(client, make_finding(), make_context())
 
-    final_call_kwargs = client.messages.calls[-1]
+    final_call_kwargs = client.chat.completions.calls[-1]
     assert "tools" not in final_call_kwargs
-    assert final_call_kwargs["output_config"]["format"]["type"] == "json_schema"
-    assert "recommendation" in final_call_kwargs["output_config"]["format"]["schema"]["required"]
+    assert final_call_kwargs["response_format"] == {"type": "json_object"}
 
 
 def test_tool_call_is_dispatched_and_result_fed_back():
     client = FakeClient([
-        tool_use_response("get_event_notes", {"circuit": "red_bull_ring"}),
+        tool_call_response("get_event_notes", {"circuit": "red_bull_ring"}),
         text_response("got the event notes"),
         text_response(json.dumps(VALID_ANSWER)),
     ])
     reason_about_finding(client, make_finding(), make_context())
 
-    assert len(client.messages.calls) == 3
-    # second call's messages must include the tool_result for the first tool_use
-    second_call_messages = client.messages.calls[1]["messages"]
+    assert len(client.chat.completions.calls) == 3
+    second_call_messages = client.chat.completions.calls[1]["messages"]
     tool_result_message = second_call_messages[-1]
-    assert tool_result_message["role"] == "user"
-    assert tool_result_message["content"][0]["type"] == "tool_result"
-    assert tool_result_message["content"][0]["tool_use_id"] == "tool-1"
-    assert "red_bull_ring" in tool_result_message["content"][0]["content"]
+    assert tool_result_message["role"] == "tool"
+    assert tool_result_message["tool_call_id"] == "tool-1"
+    assert "red_bull_ring" in tool_result_message["content"]
+
+
+def test_assistant_tool_call_message_is_replayed_correctly():
+    client = FakeClient([
+        tool_call_response("get_event_notes", {"circuit": "x"}, tool_call_id="call-abc"),
+        text_response("ok"),
+        text_response(json.dumps(VALID_ANSWER)),
+    ])
+    reason_about_finding(client, make_finding(), make_context())
+
+    second_call_messages = client.chat.completions.calls[1]["messages"]
+    assistant_msg = [m for m in second_call_messages if m["role"] == "assistant"][-1]
+    assert assistant_msg["tool_calls"][0]["id"] == "call-abc"
+    assert assistant_msg["tool_calls"][0]["function"]["name"] == "get_event_notes"
 
 
 def test_unknown_tool_name_reports_error_without_crashing():
     client = FakeClient([
-        tool_use_response("not_a_real_tool", {}),
+        tool_call_response("not_a_real_tool", {}),
         text_response("ok"),
         text_response(json.dumps(VALID_ANSWER)),
     ])
     result = reason_about_finding(client, make_finding(), make_context())
     assert result.recommendation == Verdict.VIOLATION
 
-    second_call_messages = client.messages.calls[1]["messages"]
-    tool_result = second_call_messages[-1]["content"][0]
-    assert tool_result["is_error"] is True
+    second_call_messages = client.chat.completions.calls[1]["messages"]
+    tool_result = second_call_messages[-1]
+    assert "Unknown tool" in tool_result["content"]
 
 
 def test_tool_exception_reports_error_without_crashing():
@@ -135,25 +170,43 @@ def test_tool_exception_reports_error_without_crashing():
     client = FakeClient([
         # a non-empty precedent store is required to reach EventType(...)
         # instead of returning the tool's own "no store" message early
-        tool_use_response("get_session_precedents", {"corner": 1, "event_type": "not_a_real_type"}),
+        tool_call_response("get_session_precedents", {"corner": 1, "event_type": "not_a_real_type"}),
         text_response("ok"),
         text_response(json.dumps(VALID_ANSWER)),
     ])
     result = reason_about_finding(client, make_finding(), context)
     assert result.recommendation == Verdict.VIOLATION
 
-    second_call_messages = client.messages.calls[1]["messages"]
-    tool_result = second_call_messages[-1]["content"][0]
-    assert tool_result["is_error"] is True
+    second_call_messages = client.chat.completions.calls[1]["messages"]
+    tool_result = second_call_messages[-1]
+    assert "Error" in tool_result["content"]
+
+
+def test_malformed_tool_call_arguments_json_reports_error_without_crashing():
+    # arguments is not valid JSON at all -- json.loads itself must raise
+    # cleanly and be caught, not crash the loop
+    bad_tool_call = FakeToolCall("tool-1", "get_event_notes", {})
+    bad_tool_call.function.arguments = "{not valid json"
+    client = FakeClient([
+        FakeResponse(finish_reason="tool_calls", message=FakeMessage(content=None, tool_calls=[bad_tool_call])),
+        text_response("ok"),
+        text_response(json.dumps(VALID_ANSWER)),
+    ])
+    result = reason_about_finding(client, make_finding(), make_context())
+    assert result.recommendation == Verdict.VIOLATION
+
+    second_call_messages = client.chat.completions.calls[1]["messages"]
+    tool_result = second_call_messages[-1]
+    assert "Error" in tool_result["content"]
 
 
 def test_max_tool_iterations_is_respected():
-    looping = [tool_use_response("get_event_notes", {"circuit": "x"}) for _ in range(MAX_TOOL_ITERATIONS)]
+    looping = [tool_call_response("get_event_notes", {"circuit": "x"}) for _ in range(MAX_TOOL_ITERATIONS)]
     client = FakeClient(looping + [text_response(json.dumps(VALID_ANSWER))])
     result = reason_about_finding(client, make_finding(), make_context())
 
     assert result.recommendation == Verdict.VIOLATION
-    assert len(client.messages.calls) == MAX_TOOL_ITERATIONS + 1
+    assert len(client.chat.completions.calls) == MAX_TOOL_ITERATIONS + 1
 
 
 def test_malformed_json_raises_not_a_guessed_verdict():
@@ -187,10 +240,10 @@ def test_invalid_recommendation_value_raises():
         reason_about_finding(client, make_finding(), make_context())
 
 
-def test_no_text_block_on_final_pass_raises():
+def test_no_content_on_final_pass_raises():
     client = FakeClient([
         text_response("done"),
-        FakeResponse(stop_reason="end_turn", content=[]),
+        text_response(None),
     ])
     with pytest.raises(MalformedAgentOutput):
         reason_about_finding(client, make_finding(), make_context())

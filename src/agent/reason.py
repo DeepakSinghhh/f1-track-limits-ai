@@ -5,48 +5,65 @@ Runs on the ~120 items per race Tier 4 could not resolve with confidence
 and never as the system's final word: this produces a recommendation, a
 human steward still decides (Section 0).
 
-The mandatory both-sides output template ("This template is a safety
-control, not a formatting preference") is enforced with structured
-outputs -- a JSON schema with all six fields required -- rather than by
-hoping the model follows a text template. The flow is two phases: an
-ordinary tool-use loop for research (get_telemetry, get_neighbouring_cars,
-get_session_precedents, get_event_notes, get_driving_standards_guideline),
-then one final call with no tools but a required schema, so the mandatory
-fields are guaranteed present regardless of how the research phase ended.
+Provider: Groq (OpenAI-compatible chat-completions API), per this
+project's explicit choice -- NOT the "Model: Claude via API" the plan
+text names in Section 5.8. Two consequences of that swap worth keeping
+in mind when reading this module:
+
+- Tool call arguments arrive as a JSON *string*
+  (`tool_call.function.arguments`), not a pre-parsed dict the way
+  Anthropic's `tool_use.input` is -- every dispatch here does its own
+  `json.loads`.
+- Groq's `response_format={"type": "json_object"}` guarantees syntactically
+  valid JSON, but -- unlike Anthropic's `output_config.format` json_schema
+  -- does not itself enforce which keys are present. The mandatory
+  both-sides template ("a safety control, not a formatting preference")
+  is therefore enforced here by strict client-side validation after the
+  call: every required field is checked and `recommendation` is validated
+  against the real Verdict enum, raising MalformedAgentOutput on any
+  deviation rather than silently accepting a partial answer. This is the
+  same guarantee the schema gave server-side on Anthropic, just enforced
+  on this side of the API boundary instead of the other.
+
+Not live-verified: this sandbox's egress policy blocks api.groq.com, so
+only the fake-client tests (tests/test_agent_reason.py) have actually
+exercised this code. Run it against a real key outside this sandbox
+before trusting it in production.
 """
 from __future__ import annotations
 
 import json
 from dataclasses import dataclass
 
-import anthropic
+import groq
 
 from src.agent.tools import AgentContext, build_tools
 from src.schemas import Finding, Verdict
 
-MODEL = "claude-opus-5"
+#: Verify against Groq's current model catalog
+#: (https://console.groq.com/docs/models) before deploying -- could not
+#: be checked live from this sandbox. Needs tool-calling support.
+MODEL = "llama-3.3-70b-versatile"
 MAX_TOOL_ITERATIONS = 6
 
-_OUTPUT_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "finding": {"type": "string", "description": "The finding restated in one or two sentences."},
-        "case_for_violation": {"type": "string", "description": "The evidence-backed case that this was a violation."},
-        "case_against": {"type": "string", "description": "The evidence-backed case that it was not."},
-        "missing_evidence": {"type": "string", "description": "What would resolve this, if anything. Say 'none' if nothing would."},
-        "precedents_this_session": {"type": "string", "description": "Relevant precedents retrieved, or 'none retrieved'."},
-        "recommendation": {"type": "string", "enum": [v.value for v in Verdict]},
-    },
-    "required": [
-        "finding",
-        "case_for_violation",
-        "case_against",
-        "missing_evidence",
-        "precedents_this_session",
-        "recommendation",
-    ],
-    "additionalProperties": False,
-}
+_REQUIRED_FIELDS = (
+    "finding",
+    "case_for_violation",
+    "case_against",
+    "missing_evidence",
+    "precedents_this_session",
+    "recommendation",
+)
+
+_OUTPUT_SCHEMA_DESCRIPTION = """Respond with ONLY a JSON object (no other text) with exactly these keys:
+{
+  "finding": "<the finding restated in one or two sentences>",
+  "case_for_violation": "<the evidence-backed case that this was a violation>",
+  "case_against": "<the evidence-backed case that it was not>",
+  "missing_evidence": "<what would resolve this, if anything -- say 'none' if nothing would>",
+  "precedents_this_session": "<relevant precedents retrieved, or 'none retrieved'>",
+  "recommendation": "<one of: violation, no_violation, insufficient_evidence>"
+}"""
 
 SYSTEM_PROMPT = (
     "You are an advisory reviewer for an F1 steward-assist system. You are shown one "
@@ -72,10 +89,9 @@ class AgentReasoning:
 
 
 class MalformedAgentOutput(RuntimeError):
-    """The model's structured output didn't parse into a valid
-    AgentReasoning. Surfaced, never silently downgraded to a guessed
-    verdict -- an agent that can fail to answer is safer than one that
-    always appears to.
+    """The model's output didn't parse into a valid AgentReasoning.
+    Surfaced, never silently downgraded to a guessed verdict -- an agent
+    that can fail to answer is safer than one that always appears to.
     """
 
 
@@ -92,73 +108,116 @@ def _describe_finding(finding: Finding) -> str:
     )
 
 
+def _to_groq_tools(schemas: list[dict]) -> list[dict]:
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": s["name"],
+                "description": s["description"],
+                "parameters": s["input_schema"],
+            },
+        }
+        for s in schemas
+    ]
+
+
 def reason_about_finding(
-    client: anthropic.Anthropic,
+    client: groq.Groq,
     finding: Finding,
     context: AgentContext,
     extra_instructions: str = "",
 ) -> AgentReasoning:
     schemas, dispatch = build_tools(context)
+    groq_tools = _to_groq_tools(schemas)
 
     user_prompt = _describe_finding(finding)
     if extra_instructions:
         user_prompt += f"\n{extra_instructions}\n"
     user_prompt += "\nUse the tools to gather context, then explain your reasoning."
 
-    messages: list[dict] = [{"role": "user", "content": user_prompt}]
+    messages: list[dict] = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": user_prompt},
+    ]
 
     for _ in range(MAX_TOOL_ITERATIONS):
-        response = client.messages.create(
+        # A snapshot copy, not `messages` itself: `messages` keeps growing
+        # after this call is made, and passing the live list would mean a
+        # caller that logs/inspects create()'s kwargs later (this
+        # module's own tests included) sees a list mutated by everything
+        # that happened after, not what was actually sent at this point.
+        response = client.chat.completions.create(
             model=MODEL,
-            max_tokens=4096,
-            system=SYSTEM_PROMPT,
-            tools=schemas,
-            messages=messages,
+            messages=list(messages),
+            tools=groq_tools,
+            tool_choice="auto",
         )
+        choice = response.choices[0]
 
-        if response.stop_reason != "tool_use":
+        if choice.finish_reason != "tool_calls" or not choice.message.tool_calls:
             break
 
-        messages.append({"role": "assistant", "content": response.content})
-        tool_results = []
-        for block in response.content:
-            if block.type != "tool_use":
-                continue
-            fn = dispatch.get(block.name)
+        assistant_msg = {
+            "role": "assistant",
+            "content": choice.message.content,
+            "tool_calls": [
+                {
+                    "id": tc.id,
+                    "type": "function",
+                    "function": {"name": tc.function.name, "arguments": tc.function.arguments},
+                }
+                for tc in choice.message.tool_calls
+            ],
+        }
+        messages.append(assistant_msg)
+
+        for tc in choice.message.tool_calls:
+            fn = dispatch.get(tc.function.name)
             if fn is None:
-                tool_results.append(
-                    {"type": "tool_result", "tool_use_id": block.id, "content": f"Unknown tool {block.name!r}", "is_error": True}
+                messages.append(
+                    {"role": "tool", "tool_call_id": tc.id, "content": f"Unknown tool {tc.function.name!r}"}
                 )
                 continue
             try:
-                result = fn(**block.input)
-                tool_results.append({"type": "tool_result", "tool_use_id": block.id, "content": str(result)})
+                kwargs = json.loads(tc.function.arguments)
+                result = fn(**kwargs)
+                messages.append({"role": "tool", "tool_call_id": tc.id, "content": str(result)})
             except Exception as exc:  # tool errors go back to the model, not raised here
-                tool_results.append(
-                    {"type": "tool_result", "tool_use_id": block.id, "content": str(exc), "is_error": True}
-                )
-        messages.append({"role": "user", "content": tool_results})
+                messages.append({"role": "tool", "tool_call_id": tc.id, "content": f"Error: {exc}"})
     else:
-        messages.append({"role": "user", "content": "Tool research budget reached. Give your final recommendation now."})
+        messages.append(
+            {"role": "user", "content": "Tool research budget reached. Give your final recommendation now."}
+        )
 
-    # Final pass: no tools, a required schema. This is what guarantees the
-    # mandatory template regardless of how the research loop above ended.
-    final = client.messages.create(
+    # Final pass: no tools, JSON mode, with the required schema spelled out
+    # in the prompt -- see the module docstring for why this is validated
+    # client-side rather than server-enforced on this provider. Builds a
+    # new list rather than mutating `messages` in place, so a caller that
+    # inspects/logs each create() call's kwargs afterward (this module's
+    # own tests included) sees what was actually sent at that point, not
+    # a list mutated by everything that happened after.
+    final_messages = messages + [
+        {"role": "user", "content": f"Give your final recommendation now.\n\n{_OUTPUT_SCHEMA_DESCRIPTION}"}
+    ]
+    final = client.chat.completions.create(
         model=MODEL,
-        max_tokens=2048,
-        system=SYSTEM_PROMPT,
-        messages=messages + [{"role": "user", "content": "Give your final structured recommendation now."}],
-        output_config={"format": {"type": "json_schema", "schema": _OUTPUT_SCHEMA}},
+        messages=final_messages,
+        response_format={"type": "json_object"},
     )
 
-    text = next((b.text for b in final.content if b.type == "text"), None)
-    if text is None:
-        raise MalformedAgentOutput("agent produced no text block on the final structured-output pass")
+    text = final.choices[0].message.content
+    if not text:
+        raise MalformedAgentOutput("agent produced no content on the final JSON-mode pass")
 
     try:
         data = json.loads(text)
     except json.JSONDecodeError as exc:
         raise MalformedAgentOutput(f"agent output was not valid JSON: {exc}") from exc
+
+    missing = [f for f in _REQUIRED_FIELDS if f not in data]
+    if missing:
+        raise MalformedAgentOutput(f"agent output missing required field(s): {missing}")
 
     try:
         return AgentReasoning(
@@ -169,5 +228,5 @@ def reason_about_finding(
             precedents_this_session=data["precedents_this_session"],
             recommendation=Verdict(data["recommendation"]),
         )
-    except (KeyError, ValueError) as exc:
-        raise MalformedAgentOutput(f"agent output missing or invalid field: {exc}") from exc
+    except ValueError as exc:
+        raise MalformedAgentOutput(f"agent output had an invalid recommendation value: {exc}") from exc
