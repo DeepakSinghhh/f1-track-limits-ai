@@ -1,3 +1,5 @@
+import math
+
 import streamlit as st
 import cv2
 import pandas as pd
@@ -5,10 +7,12 @@ import tempfile
 import os
 import subprocess
 
+from src.calibration import CalibrationError, calibrate
 from src.detector import TrackLimitDetector
 from src.rules.escalation import EscalationEngine, SessionType
 from src.audit.log import OverrideLog
 from src.config import load_event_config
+from src.track.build import build_straight_segment_track
 
 CONFIG_PATH = "config/events/demo_clip.yaml"
 OVERRIDE_LOG_PATH = "data/overrides/demo_session.jsonl"
@@ -86,10 +90,85 @@ if "findings" not in st.session_state:
 if "processed_video" not in st.session_state:
     st.session_state.processed_video = None
 
+if "calibration_bundle" not in st.session_state:
+    st.session_state.calibration_bundle = None  # (CameraCalibration, TrackFrame, Boundary, heading_rad) or None
+
 # --- SIDEBAR: INGESTION & CONFIG ---
 st.sidebar.markdown("### <i class='fa-solid fa-sliders'></i> Pipeline Ingestion", unsafe_allow_html=True)
 use_sample = st.sidebar.button("⚡ Load Sample Race Clip")
 uploaded_file = st.sidebar.file_uploader("📁 Ingest Custom Video", type=["mp4", "avi"])
+
+st.sidebar.markdown("---")
+
+with st.sidebar.expander("🎯 Calibration (optional) — real boundary & per-wheel geometry"):
+    st.caption(
+        "Without this, findings use the illustrative on-screen zone and always report "
+        "INSUFFICIENT_EVIDENCE (no per-wheel data). With it, every point below is real: "
+        "a homography fit from the correspondences you give, and a straight local track "
+        "model from the two segment points — genuine VIOLATION findings become possible. "
+        "Read pixel coordinates off the frame preview below once a clip is loaded."
+    )
+
+    preview_path = "sample_video.mp4" if use_sample else None
+    if uploaded_file is not None:
+        _preview_tfile = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
+        _preview_tfile.write(uploaded_file.getvalue())
+        preview_path = _preview_tfile.name
+    if preview_path and os.path.exists(preview_path):
+        _cap = cv2.VideoCapture(preview_path)
+        _ok, _first_frame = _cap.read()
+        _cap.release()
+        if _ok:
+            st.image(cv2.cvtColor(_first_frame, cv2.COLOR_BGR2RGB), caption="First frame (for reading pixel coordinates)")
+
+    st.markdown("**Point correspondences** (image pixel &rarr; world metres), at least 4:")
+    image_points, world_points = [], []
+    for i in range(4):
+        c1, c2, c3, c4 = st.columns(4)
+        u = c1.number_input(f"px u{i+1}", value=0.0, key=f"cal_u{i}")
+        v = c2.number_input(f"px v{i+1}", value=0.0, key=f"cal_v{i}")
+        x = c3.number_input(f"m x{i+1}", value=0.0, key=f"cal_x{i}")
+        y = c4.number_input(f"m y{i+1}", value=0.0, key=f"cal_y{i}")
+        image_points.append((u, v))
+        world_points.append((x, y))
+
+    st.markdown("**Local track segment** (world metres, direction of travel p1 &rarr; p2):")
+    c1, c2 = st.columns(2)
+    seg_p1 = (c1.number_input("p1 x", value=0.0, key="cal_p1x"), c1.number_input("p1 y", value=0.0, key="cal_p1y"))
+    seg_p2 = (c2.number_input("p2 x", value=10.0, key="cal_p2x"), c2.number_input("p2 y", value=0.0, key="cal_p2y"))
+
+    c1, c2 = st.columns(2)
+    left_half_width_m = c1.number_input("Left half-width (m)", value=4.0, min_value=0.1, key="cal_left")
+    right_half_width_m = c2.number_input("Right half-width (m)", value=4.0, min_value=0.1, key="cal_right")
+
+    if st.button("Apply Calibration"):
+        try:
+            calibration = calibrate(image_points, world_points)
+            heading_rad = math.atan2(seg_p2[1] - seg_p1[1], seg_p2[0] - seg_p1[0])
+            event_config = load_event_config(CONFIG_PATH)
+            track_frame, boundary = build_straight_segment_track(
+                p1=seg_p1,
+                p2=seg_p2,
+                left_half_width_m=left_half_width_m,
+                right_half_width_m=right_half_width_m,
+                white_line_width_m=event_config.white_line_width_m,
+            )
+            st.session_state.calibration_bundle = (calibration, track_frame, boundary, heading_rad)
+            st.success(f"Calibrated. Reprojection error: {calibration.reprojection_error_px:.2f}px.")
+        except (CalibrationError, ValueError) as exc:
+            st.session_state.calibration_bundle = None
+            st.error(f"Calibration failed: {exc}")
+
+    if st.session_state.calibration_bundle is not None:
+        _cal, _, _, _heading = st.session_state.calibration_bundle
+        st.caption(
+            f"Active: reprojection error {_cal.reprojection_error_px:.2f}px, "
+            f"heading {math.degrees(_heading):.1f}°. "
+            f"Cleared automatically if this form is edited and not re-applied."
+        )
+        if st.button("Clear Calibration"):
+            st.session_state.calibration_bundle = None
+            st.rerun()
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("### <i class='fa-solid fa-gear'></i> Session & Detection Parameters", unsafe_allow_html=True)
@@ -100,13 +179,22 @@ min_duration_frames = st.sidebar.slider("Minimum Event Duration (frames)", 1, 15
 steward_id = st.sidebar.text_input("Steward ID", value="steward-1")
 
 st.sidebar.markdown("---")
-st.sidebar.caption(
-    "**Demo limitations**, stated rather than hidden: the drawn zone is an illustrative "
-    "screen-space region, not a calibrated track boundary (see src/track/); detection uses a "
-    "single reference point per vehicle, not per-wheel contact patches, so the rule engine "
-    "correctly reports INSUFFICIENT_EVIDENCE for the Art. 33.3 wheel-count test on every "
-    "candidate. Nothing here is auto-penalised or auto-struck."
-)
+if st.session_state.calibration_bundle is not None:
+    st.sidebar.caption(
+        "**Calibrated run**: findings use a real homography and per-wheel geometry — "
+        "genuine VIOLATION/NO_VIOLATION verdicts are possible, not just abstention. "
+        "Still a single dominant-vehicle tracker (no per-car ID) and a straight local "
+        "track model valid only near the segment you calibrated. Nothing here is "
+        "auto-penalised or auto-struck regardless."
+    )
+else:
+    st.sidebar.caption(
+        "**Demo limitations**, stated rather than hidden: the drawn zone is an illustrative "
+        "screen-space region, not a calibrated track boundary; detection uses a single "
+        "reference point per vehicle, not per-wheel contact patches, so the rule engine "
+        "correctly reports INSUFFICIENT_EVIDENCE for the Art. 33.3 wheel-count test on every "
+        "candidate. Calibrate above to change that. Nothing here is auto-penalised or auto-struck."
+    )
 
 video_path = None
 if use_sample:
@@ -131,12 +219,18 @@ if run_clicked and video_path and os.path.exists(video_path):
         final_out = "final_out.mp4"
         out = cv2.VideoWriter(raw_out, cv2.VideoWriter_fourcc(*'mp4v'), fps, (width, height))
 
-        detector = TrackLimitDetector(
+        detector_kwargs = dict(
             fps=fps,
             config=CONFIG_PATH,
             conf_threshold=conf_threshold,
             min_duration_s=min_duration_frames / fps,
         )
+        if st.session_state.calibration_bundle is not None:
+            calibration, track_frame, boundary, heading_rad = st.session_state.calibration_bundle
+            detector_kwargs.update(
+                calibration=calibration, track_frame=track_frame, boundary=boundary, heading_rad=heading_rad
+            )
+        detector = TrackLimitDetector(**detector_kwargs)
 
         findings = []
         progress_bar = st.progress(0)
@@ -195,11 +289,16 @@ if st.session_state.processed_video:
     with col1:
         st.subheader("▶️ Output: Boundary-Overlay Replay")
         st.video(final_out)
-        st.caption(
-            "The drawn zone is illustrative only — a fixed screen-space region, not a calibrated "
-            "track boundary. src/track/ has the real Frenet-frame boundary model; it is not yet "
-            "wired into this video pipeline."
-        )
+        if st.session_state.calibration_bundle is not None:
+            st.caption(
+                "Boundary drawn from the calibration applied for this run — a real homography "
+                "and a straight local track model, valid only near the segment calibrated."
+            )
+        else:
+            st.caption(
+                "The drawn zone is illustrative only — a fixed screen-space region, not a calibrated "
+                "track boundary. Use the Calibration panel in the sidebar for real geometry."
+            )
 
     with col2:
         st.subheader("📋 Steward Review Queue")
