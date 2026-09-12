@@ -93,13 +93,30 @@ agent, trust/calibration, the steward console) sits on top of:
   `/reject` are the only path to `EscalationEngine.increment_strike` /
   `reject_finding` — routed through a steward decision, exactly like
   `app.py`. `GET /overrides` exposes the audit log; `/ws/queue` pushes a
-  snapshot on connect and a broadcast on every new item. Two honest gaps
-  stated in its own module docstring: `agent_reasoning` and
-  `evidence_clip_path` are always `None` (Tiers 3 and 5's clip export
-  aren't built), and `conformal_set` is always a singleton matching the
-  rule engine's own verdict, because real conformal prediction needs a
-  calibration set `src/eval/` doesn't produce yet — the API doesn't
-  fabricate an ambiguity signal it has no data to support.
+  snapshot on connect and a broadcast on every new item. `conformal_set`
+  is still always a singleton matching the rule engine's own verdict —
+  real conformal prediction needs a calibration set `src/eval/` doesn't
+  produce yet, and the API doesn't fabricate an ambiguity signal it has
+  no data to support.
+  **`agent_reasoning` is now wired in** (Section 5.8, Tier 3): `create_app`
+  takes an optional `agent_client` (a Groq client; `None` by default, so
+  the API works exactly as before with no key or network configured).
+  When one is supplied, any submitted item whose trust scalar falls below
+  0.5 — the same threshold `decide_verdict` uses to abstain, so this is
+  literally "the ambiguous slice" — gets a real
+  `reason_about_finding` call, formatted into `agent_reasoning` using
+  Section 5.8's own template (`FINDING:` / `CASE FOR VIOLATION:` /
+  `CASE AGAINST:` / `MISSING EVIDENCE:` / `PRECEDENTS THIS SESSION:` /
+  `RECOMMENDATION:`) verbatim. The call runs via `asyncio.to_thread` so a
+  slow synchronous Groq call doesn't block the event loop, and any
+  failure (network, a malformed response) is caught and leaves
+  `agent_reasoning` at `None` rather than failing the submission — the
+  agent is advisory, so its absence is just the same as not configuring
+  one. Confirmed with 5 new API tests (agent triggered under low trust,
+  skipped under high trust, failure isolation, and the disabled-by-default
+  case) using the same scripted fake Groq client as `src/agent/`'s own
+  tests (now shared from `tests/fake_groq.py` instead of duplicated).
+  `app.py` does not call the agent yet — this wiring is API-only so far.
 
 - `src/eval/metrics.py` (Section 5.11) — `precision_recall` (recall is the
   metric that matters most here: "a missed violation is worse than a
@@ -178,7 +195,7 @@ agent, trust/calibration, the steward console) sits on top of:
   production.
 
 Run the tests: `pip install -r requirements.txt && python3 -m pytest`
-(180 tests + 1 skipped without an API key, including the five Section 5.6
+(185 tests + 1 skipped without an API key, including the five Section 5.6
 requires verbatim and the Section 5.1 round-trip acceptance criterion).
 
 ### Where Tier 2's determinism ends on purpose
@@ -206,9 +223,9 @@ present measurement. The only Tier 2-level abstention is missing data.
   calibration form rather than an interactive click tool.
   `model_confidence` in `trust/` is still a caller-supplied score —
   nothing produces one from real data yet.
-- `src/agent/` is built (above) but not wired into `src/api/` —
-  `StewardItem.agent_reasoning` there is still always `None`; nothing
-  calls `reason_about_finding` from the running API or `app.py` yet.
+- `src/agent/` is wired into `src/api/` now (above), but not into
+  `app.py` — the Streamlit demo still evaluates findings directly,
+  in-process, with no agent call.
 - `console/` (Tier 5) — a real frontend for `src/api/`'s queue (`app.py`'s
   Streamlit UI is the only steward-facing surface right now, and it
   doesn't talk to the API — it evaluates and reviews findings directly,
