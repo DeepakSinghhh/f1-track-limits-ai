@@ -38,9 +38,24 @@ agent, trust/calibration, the steward console) sits on top of:
 - `src/audit/log.py` — append-only JSONL override log. Every
   `increment_strike` / `reject_finding` call is recorded with steward id,
   system verdict, human decision, and rationale.
+- `src/track/frame.py` (Section 5.1) — `TrackFrame`: `to_frenet(x, y) ->
+  (s, d)` / `to_cartesian(s, d) -> (x, y)` over a closed-loop centreline,
+  via cumulative arc length + nearest-segment projection. Round-trips to
+  within 0.05m across a full lap (the plan's acceptance criterion, tested
+  on a synthetic circle).
+- `src/track/boundary.py` — `Boundary.half_width(s)` /
+  `signed_distance_to_edge(s, d)` (positive = outside the track). Adds
+  `white_line_width_m` to the painted edge, since the decision surface is
+  the white line's outer edge, not the paint itself.
+- `src/track/build.py` — `build_track`: bootstraps a `TrackFrame` from a
+  reference centreline, then estimates `Boundary` edge widths from
+  per-s percentiles of the lateral offset across a car-position envelope
+  ("the field collectively paints the track surface"), smoothed
+  circularly. Tested against a synthetic envelope with a known width.
 
 Run the tests: `pip install -r requirements.txt && python3 -m pytest`
-(27 tests, including the five required by Section 5.6 verbatim).
+(41 tests, including the five Section 5.6 requires verbatim and the
+Section 5.1 round-trip acceptance criterion).
 
 ### Where Tier 2's determinism ends on purpose
 
@@ -55,13 +70,11 @@ present measurement. The only Tier 2-level abstention is missing data.
 
 ## Not yet built
 
-- `src/track/` (Section 5.1) — Frenet frame, boundary model. Named first
-  in the build order ("nothing else works without it") but not required
-  to exercise `rules/` against synthetic `ExcursionEvent`s, which is what
-  this slice covers.
 - `src/telemetry/`, `src/vision/`, `src/events/` (Tiers 0-1) — perception
-  and event localisation; `ExcursionEvent`s are hand-built in tests for
-  now via `tests/factories.py`.
+  and event localisation. `src/track/` (the "spine" these depend on) is
+  built, but nothing yet feeds it real session data — `build_track` is
+  exercised with a synthetic car-position envelope in tests, and
+  `ExcursionEvent`s are hand-built via `tests/factories.py` for `rules/`.
 - `src/trust/` (Tier 4) — the five-component trust vector, isotonic
   calibration, and split conformal prediction that turns a `Finding` into
   a ranked, confidence-decomposed `StewardItem`.
