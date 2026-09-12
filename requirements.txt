@@ -5,3 +5,6 @@ numpy
 ultralytics
 pyyaml
 pytest
+fastapi
+uvicorn
+httpx

@@ -85,8 +85,24 @@ agent, trust/calibration, the steward console) sits on top of:
   proves its `ExcursionEvent` output feeds `rules/engine.py` with no
   adapter needed — the payoff of fixing data contracts before any tier.
 
+- `src/api/main.py` (Section 5.10, Tier 5 backend) — FastAPI + WebSocket
+  serving a ranked steward review queue: `POST /events` runs an
+  `ExcursionEvent` through `RuleEngine` and `trust/`, builds a
+  `StewardItem`, and broadcasts it; `GET /queue` returns items sorted by
+  `priority` (the trust scalar); `POST /queue/{id}/confirm` and
+  `/reject` are the only path to `EscalationEngine.increment_strike` /
+  `reject_finding` — routed through a steward decision, exactly like
+  `app.py`. `GET /overrides` exposes the audit log; `/ws/queue` pushes a
+  snapshot on connect and a broadcast on every new item. Two honest gaps
+  stated in its own module docstring: `agent_reasoning` and
+  `evidence_clip_path` are always `None` (Tiers 3 and 5's clip export
+  aren't built), and `conformal_set` is always a singleton matching the
+  rule engine's own verdict, because real conformal prediction needs a
+  calibration set `src/eval/` doesn't produce yet — the API doesn't
+  fabricate an ambiguity signal it has no data to support.
+
 Run the tests: `pip install -r requirements.txt && python3 -m pytest`
-(87 tests, including the five Section 5.6 requires verbatim and the
+(99 tests, including the five Section 5.6 requires verbatim and the
 Section 5.1 round-trip acceptance criterion).
 
 ### Where Tier 2's determinism ends on purpose
@@ -110,8 +126,10 @@ present measurement. The only Tier 2-level abstention is missing data.
   tests — nothing produces one from real data yet.
 - `src/agent/` (Tier 3) — the both-sides LLM reasoning pass over the
   ambiguous slice.
-- `src/render/`, `src/api/`, `console/` (Tier 5) — boundary-overlay clip
-  export and the steward console.
+- `src/render/`, `console/` (Tier 5) — the boundary-overlay clip export,
+  and a real frontend for `src/api/`'s queue (`app.py`'s Streamlit UI is
+  the only steward-facing surface right now, and it doesn't talk to the
+  API — it evaluates and reviews findings directly, in-process).
 - `src/eval/` — FIA decision scraping and metrics.
 
 ## The CV demo pipeline (`app.py`, `src/detector.py`, `src/geofence.py`)
