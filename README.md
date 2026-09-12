@@ -111,8 +111,27 @@ agent, trust/calibration, the steward console) sits on top of:
   `src/eval/scrape_fia.py` (real FIA stewards' decisions) existing yet.
   Expected calibration error already lives in `trust/calibrate.py`.
 
+- `src/render/overlay.py` (Section 5.9) — the boundary-overlay replay clip
+  export named explicitly in the problem statement. Per frame:
+  `project_boundary_edge` samples `Boundary.half_width` over an s-window
+  and projects it through a per-clip homography (`apply_homography`);
+  `draw_contact_points` colours each tracked point by
+  `wheel_margins`' sign; `draw_margin_readout` shows the minimum wheel
+  margin with its uncertainty; `draw_minimap_inset` renders a bird's-eye
+  (s, d) view with the car's trail in the same coordinate system as
+  `track/`; `draw_timeline_strip` marks onset/peak/re-entry against the
+  current playhead. `render_incident_clip` orchestrates all of it over a
+  frame sequence and writes an mp4. The ffmpeg re-encode to a more
+  broadly compatible codec is best-effort (`_try_reencode_h264` falls
+  back to the raw `mp4v` output on a missing binary or a failed run) —
+  verified in this environment, which has no system ffmpeg, that
+  OpenCV's own mp4v container is a complete, independently readable clip
+  either way. Caught a real bug while writing its test: an early version
+  could produce `raw_path == output_path`, which would have pointed the
+  re-encode step at reading and writing the same file.
+
 Run the tests: `pip install -r requirements.txt && python3 -m pytest`
-(114 tests, including the five Section 5.6 requires verbatim and the
+(128 tests, including the five Section 5.6 requires verbatim and the
 Section 5.1 round-trip acceptance criterion).
 
 ### Where Tier 2's determinism ends on purpose
@@ -136,10 +155,12 @@ present measurement. The only Tier 2-level abstention is missing data.
   tests — nothing produces one from real data yet.
 - `src/agent/` (Tier 3) — the both-sides LLM reasoning pass over the
   ambiguous slice.
-- `src/render/`, `console/` (Tier 5) — the boundary-overlay clip export,
-  and a real frontend for `src/api/`'s queue (`app.py`'s Streamlit UI is
-  the only steward-facing surface right now, and it doesn't talk to the
-  API — it evaluates and reviews findings directly, in-process).
+- `console/` (Tier 5) — a real frontend for `src/api/`'s queue (`app.py`'s
+  Streamlit UI is the only steward-facing surface right now, and it
+  doesn't talk to the API — it evaluates and reviews findings directly,
+  in-process). `src/render/overlay.py` is built (above) but not wired
+  into either `app.py` or `src/api/` yet — nothing calls it end-to-end
+  with real detection output.
 - `src/eval/scrape_fia.py` — parsing real FIA stewards' decision documents
   into ground truth. `src/eval/metrics.py` (above) is built and tested,
   just with no real labelled data to run it against yet.
