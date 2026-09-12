@@ -72,8 +72,66 @@ agent, trust/calibration, the steward console) sits on top of:
   uncertain than the calibration set ever saw, empty-falling-back-to-both)
   set is genuine ambiguity.
 
+- `src/events/localise.py` (Section 5.4, Tier 1) — `localise_events`:
+  hysteresis (+2cm enter / -2cm exit) plus a minimum-duration gate over a
+  `CarState` stream, no trained model. The trigger signal is the CAR's own
+  margin (all telemetry has, per Section 5.2 — wheel_d is None there),
+  while `wheels_off_peak` is recorded separately only where wheel data
+  exists; this also matches Section 2's funnel, where most candidates
+  turn out to be legal (1-3 wheels), not four-wheel violations. Proposes
+  FORCED_OFF / AVOIDANCE / EXCURSION_NO_ADVANTAGE from `RelationalContext`
+  (the counterfactual-gain split against EXCURSION_WITH_GAIN is Section
+  5.5's estimator, not built yet). `tests/test_pipeline_localise_to_rules.py`
+  proves its `ExcursionEvent` output feeds `rules/engine.py` with no
+  adapter needed — the payoff of fixing data contracts before any tier.
+
+- `src/api/main.py` (Section 5.10, Tier 5 backend) — FastAPI + WebSocket
+  serving a ranked steward review queue: `POST /events` runs an
+  `ExcursionEvent` through `RuleEngine` and `trust/`, builds a
+  `StewardItem`, and broadcasts it; `GET /queue` returns items sorted by
+  `priority` (the trust scalar); `POST /queue/{id}/confirm` and
+  `/reject` are the only path to `EscalationEngine.increment_strike` /
+  `reject_finding` — routed through a steward decision, exactly like
+  `app.py`. `GET /overrides` exposes the audit log; `/ws/queue` pushes a
+  snapshot on connect and a broadcast on every new item. Two honest gaps
+  stated in its own module docstring: `agent_reasoning` and
+  `evidence_clip_path` are always `None` (Tiers 3 and 5's clip export
+  aren't built), and `conformal_set` is always a singleton matching the
+  rule engine's own verdict, because real conformal prediction needs a
+  calibration set `src/eval/` doesn't produce yet — the API doesn't
+  fabricate an ambiguity signal it has no data to support.
+
+- `src/eval/metrics.py` (Section 5.11) — `precision_recall` (recall is the
+  metric that matters most here: "a missed violation is worse than a
+  queued false positive"), `steward_agreement_by_trust_band`,
+  `risk_coverage_curve`, `human_review_reduction`, `mean_flag_latency`
+  ("no real-time claims without a measured latency number", Section 8).
+  Every function takes plain lists rather than a specific labelled-data
+  type, so all of it is usable — and tested — without
+  `src/eval/scrape_fia.py` (real FIA stewards' decisions) existing yet.
+  Expected calibration error already lives in `trust/calibrate.py`.
+
+- `src/render/overlay.py` (Section 5.9) — the boundary-overlay replay clip
+  export named explicitly in the problem statement. Per frame:
+  `project_boundary_edge` samples `Boundary.half_width` over an s-window
+  and projects it through a per-clip homography (`apply_homography`);
+  `draw_contact_points` colours each tracked point by
+  `wheel_margins`' sign; `draw_margin_readout` shows the minimum wheel
+  margin with its uncertainty; `draw_minimap_inset` renders a bird's-eye
+  (s, d) view with the car's trail in the same coordinate system as
+  `track/`; `draw_timeline_strip` marks onset/peak/re-entry against the
+  current playhead. `render_incident_clip` orchestrates all of it over a
+  frame sequence and writes an mp4. The ffmpeg re-encode to a more
+  broadly compatible codec is best-effort (`_try_reencode_h264` falls
+  back to the raw `mp4v` output on a missing binary or a failed run) —
+  verified in this environment, which has no system ffmpeg, that
+  OpenCV's own mp4v container is a complete, independently readable clip
+  either way. Caught a real bug while writing its test: an early version
+  could produce `raw_path == output_path`, which would have pointed the
+  re-encode step at reading and writing the same file.
+
 Run the tests: `pip install -r requirements.txt && python3 -m pytest`
-(62 tests, including the five Section 5.6 requires verbatim and the
+(128 tests, including the five Section 5.6 requires verbatim and the
 Section 5.1 round-trip acceptance criterion).
 
 ### Where Tier 2's determinism ends on purpose
@@ -89,21 +147,65 @@ present measurement. The only Tier 2-level abstention is missing data.
 
 ## Not yet built
 
-- `src/telemetry/`, `src/vision/`, `src/events/` (Tiers 0-1) — perception
-  and event localisation. `src/track/` (the "spine" these depend on) is
-  built, but nothing yet feeds it real session data — `build_track` is
-  exercised with a synthetic car-position envelope in tests, and
-  `ExcursionEvent`s are hand-built via `tests/factories.py` for `rules/`
-  and `trust/`. `model_confidence` in `trust/` is likewise a caller-
-  supplied score in tests — nothing produces one from real data yet.
+- `src/telemetry/`, `src/vision/` (Tier 0) — perception. Nothing yet
+  produces a real `CarState` stream, a real `TrackFrame`/`Boundary`, or a
+  real `corner_of`/`lap_of` mapping — `events/localise.py` and
+  `track/build.py` are exercised with synthetic data in tests.
+  `model_confidence` in `trust/` is likewise a caller-supplied score in
+  tests — nothing produces one from real data yet.
 - `src/agent/` (Tier 3) — the both-sides LLM reasoning pass over the
   ambiguous slice.
-- `src/render/`, `src/api/`, `console/` (Tier 5) — boundary-overlay clip
-  export and the steward console.
-- `src/eval/` — FIA decision scraping and metrics.
+- `console/` (Tier 5) — a real frontend for `src/api/`'s queue (`app.py`'s
+  Streamlit UI is the only steward-facing surface right now, and it
+  doesn't talk to the API — it evaluates and reviews findings directly,
+  in-process). `src/render/overlay.py` is built (above) but not wired
+  into either `app.py` or `src/api/` yet — nothing calls it end-to-end
+  with real detection output.
+- `src/eval/scrape_fia.py` — parsing real FIA stewards' decision documents
+  into ground truth. `src/eval/metrics.py` (above) is built and tested,
+  just with no real labelled data to run it against yet.
 
-`app.py` and `src/detector.py`/`src/geofence.py`/`src/kinematics.py`/
-`src/calibration.py` are the pre-existing hackathon demo; they predate
-this core layer and are not yet wired to it — in particular the demo
-still auto-applies penalties and reports a fixed fake confidence number,
-both explicitly on the Section 8 anti-goals list for the real system.
+## The CV demo pipeline (`app.py`, `src/detector.py`, `src/geofence.py`)
+
+Originally a self-contained hackathon demo that violated most of Section
+0/8 directly: it auto-applied strikes and a "5s PENALTY" from a bare
+frame counter, displayed a hardcoded fake confidence ("94.2%") and a
+fabricated trajectory chart, and had UI controls (a circuit dropdown, a
+confidence slider, a debounce slider) that did nothing. It has been
+rewired onto the real core above rather than patched in place:
+
+- `src/geofence.py`'s `ZoneCrossingTracker` replaced the auto-striking
+  `TrackLimitTracker` — it only turns a per-frame zone-crossing boolean
+  into a candidate `ExcursionEvent` (hysteresis + duration gate, same
+  shape as `events/localise.py`), and touches no strike state. The dead,
+  unused `GeofenceEngine` class (a hardcoded polygon nothing called) was
+  deleted.
+- `src/detector.py` now loads a real `EventConfig`
+  (`config/events/demo_clip.yaml`) and runs every candidate event through
+  the actual `RuleEngine`. It also fixed a real bug: the old code called
+  `tracker.update()` once per detected box per frame into one shared
+  tracker, so multiple vehicles in frame corrupted each other's state;
+  the confidence-threshold slider was wired up but never read.
+- Because this pipeline detects one reference point per vehicle (a
+  bounding-box bottom-centre), not per-wheel contact patches — exactly
+  what Section 5.3 calls "indefensible under questioning" — every
+  candidate event honestly carries `wheels_off_peak = None`. The same
+  `RuleEngine` that handles this everywhere else correctly reports
+  `INSUFFICIENT_EVIDENCE` for it, rather than the pipeline asserting a
+  violation it has no contact-patch evidence for.
+- `app.py` no longer shows any fabricated number. It runs detection into
+  a steward review queue — each candidate event shows its real citations
+  and `exceptions_evaluated` — and strikes move only when a steward clicks
+  **Confirm Violation**, via `EscalationEngine.increment_strike` and
+  `OverrideLog`, exactly as everywhere else in this project. The sidebar
+  states the pipeline's real limitations (illustrative zone, no contact
+  patches) instead of implying calibrated precision it doesn't have.
+  `tests/test_pipeline_demo_to_rules.py` checks the abstain behavior
+  end-to-end.
+
+`src/kinematics.py` and `src/calibration.py` were already dead code (never
+imported by `app.py` or `src/detector.py`) before this pass and remain so
+— left alone rather than wired in, since making them load-bearing would
+mean building the real per-clip calibration flow Section 5.3 describes
+(an interactive 4-point tool), not hardcoding one clip's homography as if
+it applied to any uploaded video.

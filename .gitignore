@@ -3,4 +3,5 @@ __pycache__/
 .pytest_cache/
 data/cache/
 data/clips/
+data/overrides/
 *.mp4
