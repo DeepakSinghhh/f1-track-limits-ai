@@ -130,9 +130,34 @@ agent, trust/calibration, the steward console) sits on top of:
   could produce `raw_path == output_path`, which would have pointed the
   re-encode step at reading and writing the same file.
 
+- `src/agent/` (Section 5.8, Tier 3) — the LLM reasoning pass over the
+  ambiguous slice (~120 items/race, never raw frames). `tools.py` exposes
+  the five read-only tools (`get_telemetry`, `get_neighbouring_cars`,
+  `get_session_precedents`, `get_event_notes`,
+  `get_driving_standards_guideline`) as raw schemas + a dispatch table,
+  bound per reasoning pass to an `AgentContext`. `precedent.py` is a
+  within-session nearest-neighbour store over a plain feature vector — no
+  training, no vector DB, just Euclidean distance over a handful of
+  floats. `reason.py` runs a two-phase call: an ordinary tool-use loop for
+  research, then one final call with no tools but a **required JSON
+  schema** covering all six mandatory template fields (finding, case for,
+  case against, missing evidence, precedents, recommendation) — "this
+  template is a safety control, not a formatting preference" is enforced
+  by the schema itself, not by hoping the model follows a text template.
+  A response that doesn't parse raises `MalformedAgentOutput` rather than
+  silently downgrading to a guessed verdict. Model: `claude-opus-5`.
+  Validated two ways: 25 tests against a scripted fake client covering
+  tool dispatch, tool errors, the iteration cap, and every malformed-
+  output path with no network calls; plus one real end-to-end call in
+  `tests/test_agent_live.py`, skipped automatically when
+  `ANTHROPIC_API_KEY` isn't set. That call did reach the API correctly
+  authenticated — it failed on an account billing check ("credit balance
+  too low"), not the integration, so the live test is ready and will pass
+  once the key has credit.
+
 Run the tests: `pip install -r requirements.txt && python3 -m pytest`
-(128 tests, including the five Section 5.6 requires verbatim and the
-Section 5.1 round-trip acceptance criterion).
+(153 tests + 1 skipped without an API key, including the five Section 5.6
+requires verbatim and the Section 5.1 round-trip acceptance criterion).
 
 ### Where Tier 2's determinism ends on purpose
 
@@ -153,8 +178,9 @@ present measurement. The only Tier 2-level abstention is missing data.
   `track/build.py` are exercised with synthetic data in tests.
   `model_confidence` in `trust/` is likewise a caller-supplied score in
   tests — nothing produces one from real data yet.
-- `src/agent/` (Tier 3) — the both-sides LLM reasoning pass over the
-  ambiguous slice.
+- `src/agent/` is built (above) but not wired into `src/api/` —
+  `StewardItem.agent_reasoning` there is still always `None`; nothing
+  calls `reason_about_finding` from the running API or `app.py` yet.
 - `console/` (Tier 5) — a real frontend for `src/api/`'s queue (`app.py`'s
   Streamlit UI is the only steward-facing surface right now, and it
   doesn't talk to the API — it evaluates and reviews findings directly,
