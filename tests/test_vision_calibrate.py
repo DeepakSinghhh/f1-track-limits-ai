@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from src.calibration import CalibrationError, calibrate
+from src.vision.calibrate import CalibrationError, calibrate
 
 
 def test_calibrate_recovers_a_known_scale_and_translation():

@@ -5,8 +5,8 @@ with confidence scores and boundary-overlay replay clips for steward
 review." Per clip, this draws:
 
 - the boundary polyline (outer white-line edge), projected world -> image
-  via a per-clip homography (world -> image; the inverse of a
-  calibrate.py-style image -> world tool)
+  via a per-clip homography (world -> image; the inverse of
+  src.vision.calibrate's own pixel_to_world)
 - contact points, colour-coded inside/outside
 - a live readout of the minimum wheel margin in cm, with its uncertainty
 - a bird's-eye minimap inset in the same (s, d) plane as track/
@@ -28,6 +28,8 @@ import numpy as np
 from src.schemas import ExcursionEvent
 from src.track.boundary import Boundary
 from src.track.frame import TrackFrame
+from src.vision.contact import wheel_margins
+from src.vision.project import apply_homography, project_boundary_edge
 
 INSIDE_COLOR = (0, 200, 0)      # BGR: green
 OUTSIDE_COLOR = (0, 0, 220)     # BGR: red
@@ -43,45 +45,6 @@ class FrameAnnotation:
 
     session_time: float
     contact_points_xy: list[tuple[float, float]]  # world-plane coordinates, one per tracked wheel/point
-
-
-def apply_homography(homography: np.ndarray, points_xy: np.ndarray) -> np.ndarray:
-    """World (x, y) -> image (u, v) via a 3x3 homography."""
-    points_xy = np.atleast_2d(np.asarray(points_xy, dtype=float))
-    ones = np.ones((len(points_xy), 1))
-    homogeneous = np.hstack([points_xy, ones])  # (N, 3)
-    projected = homogeneous @ homography.T  # (N, 3)
-    projected = projected[:, :2] / projected[:, 2:3]
-    return projected
-
-
-def wheel_margins(frame_obj: TrackFrame, boundary: Boundary, contact_points_xy: list[tuple[float, float]]) -> list[float]:
-    """Signed distance to the boundary for each contact point. Positive = outside."""
-    return [boundary.signed_distance_to_edge(*frame_obj.to_frenet(x, y)) for x, y in contact_points_xy]
-
-
-def project_boundary_edge(
-    frame_obj: TrackFrame,
-    boundary: Boundary,
-    s_start: float,
-    s_end: float,
-    side: str,
-    homography: np.ndarray,
-    n_samples: int = 50,
-) -> np.ndarray:
-    """Sample the outer boundary edge over [s_start, s_end] and project it
-    into image space. side: "left" or "right".
-    """
-    if side not in ("left", "right"):
-        raise ValueError("side must be 'left' or 'right'")
-
-    s_values = np.linspace(s_start, s_end, n_samples)
-    world_points = []
-    for s in s_values:
-        w_left, w_right = boundary.half_width(s)
-        d = w_left if side == "left" else -w_right
-        world_points.append(frame_obj.to_cartesian(s, d))
-    return apply_homography(homography, np.array(world_points))
 
 
 def draw_boundary_overlay(frame: np.ndarray, left_edge_uv: np.ndarray, right_edge_uv: np.ndarray) -> np.ndarray:
@@ -236,10 +199,18 @@ def render_incident_clip(
         writer.write(out_frame)
     writer.release()
 
-    return _try_reencode_h264(raw_path, output_path)
+    return try_reencode_h264(raw_path, output_path)
 
 
-def _try_reencode_h264(raw_path: str, output_path: str) -> str:
+def try_reencode_h264(raw_path: str, output_path: str) -> str:
+    """Best-effort ffmpeg re-encode to a widely-compatible codec. Returns
+    output_path on success, or raw_path unchanged if ffmpeg is missing or
+    the re-encode fails -- the raw mp4v file is still a complete, readable
+    clip either way, so a missing binary degrades the codec, not the
+    caller's pipeline. Public so any caller writing raw mp4v output (not
+    just render_incident_clip) can reuse the same fallback instead of an
+    unguarded subprocess.run of its own.
+    """
     try:
         subprocess.run(
             ["ffmpeg", "-y", "-i", raw_path, "-vcodec", "libx264", output_path],

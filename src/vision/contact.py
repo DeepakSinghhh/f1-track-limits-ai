@@ -1,12 +1,18 @@
-"""Per-wheel kinematics (Section 5.3): car centre + heading -> four wheel
-world positions. "Do not use the box centroid -- the regulation turns on
-contact patches and a centroid is indefensible under questioning." This
+"""Per-wheel contact geometry (Section 5.3): car centre + heading -> four
+wheel world positions, and how far each one sits past the track boundary.
+
+"Do not use the box centroid -- the regulation turns on contact patches
+and a centroid is indefensible under questioning." wheel_world_positions
 is the step that turns a single tracked point into the four points
-Art. 33.3 actually asks about.
+Art. 33.3 actually asks about; wheel_margins is what turns those four
+points into the signed distances the rule engine and trust layer read.
 """
 from __future__ import annotations
 
 import numpy as np
+
+from src.track.boundary import Boundary
+from src.track.frame import TrackFrame
 
 #: Typical F1 car dimensions (~3.6m wheelbase, ~2.0m track width), as
 #: half-distances from the car centre to each wheel in the car's own body
@@ -38,3 +44,8 @@ def wheel_world_positions(
     rotation = np.array([[c, -s], [s, c]])
     world = np.asarray(car_world_pos, dtype=float) + (rotation @ offsets.T).T
     return tuple(map(tuple, world))
+
+
+def wheel_margins(frame_obj: TrackFrame, boundary: Boundary, contact_points_xy: list[tuple[float, float]]) -> list[float]:
+    """Signed distance to the boundary for each contact point. Positive = outside."""
+    return [boundary.signed_distance_to_edge(*frame_obj.to_frenet(x, y)) for x, y in contact_points_xy]

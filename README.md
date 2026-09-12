@@ -116,10 +116,70 @@ agent, trust/calibration, the steward console) sits on top of:
   skipped under high trust, failure isolation, and the disabled-by-default
   case) using the same scripted fake Groq client as `src/agent/`'s own
   tests (now shared from `tests/fake_groq.py` instead of duplicated).
-  `app.py` does not call the agent yet — this wiring is API-only so far.
   CORS is enabled (`allow_origins=["*"]`, permissive by design for a local
   demo API with no auth of its own) specifically so `console/` — running
   on a different dev port — can reach it.
+
+- **`app.py` is retired as a steward review surface, in favour of
+  `console/`.** It briefly grew its own local trust computation
+  (`src/review_queue.py`, a batch version of what `src/api/main.py` runs
+  per request) and a duplicate confirm/reject UI with its own override
+  log — a second, single-process copy of exactly what `console/` +
+  `src/api/` already do, and do better (a live, multi-viewer queue,
+  Section 5.10's evidence-before-verdict ordering, real-time WebSocket
+  updates). That duplication is gone now: `src/review_queue.py` and its
+  tests were deleted outright (dead code the moment nothing called it,
+  not kept around "just in case"), and `app.py` no longer imports
+  `src/agent/`, `src/trust/`, `src/rules/escalation.py`, or
+  `src/audit/log.py` at all.
+
+  What `app.py` is *for* now: it's the only thing in this project that
+  can actually run a video through YOLO, per-wheel calibration, and
+  Tier 1 localisation — `console/` has no way to ingest a video, and
+  `src/api/` has no way to run a calibration form or touch a frame. So
+  `app.py` stayed as a thin **pipeline runner**: same Ingestion and
+  Calibration sidebar sections as before, unchanged, but "Run Detection
+  Pipeline" now ends by `POST`ing every candidate `ExcursionEvent` (as
+  plain JSON, via `httpx`) to a running `src/api/` instance instead of
+  evaluating and reviewing them itself — Tier 2, Tier 4, and Tier 3 (on
+  the ambiguous slice) all now run **server-side**, on receipt, exactly
+  once, not duplicated client-side. A new "Steward Console API" sidebar
+  field sets the target URL (defaulting to `http://localhost:8000`, or
+  `APEX_API_BASE_URL` if set — same pattern as `console/`'s own API-base
+  setting); before running the (possibly slow) YOLO pass at all,
+  `app.py` first pings `GET /health` and refuses to proceed with a clear
+  error if the API isn't reachable there, rather than running the whole
+  pipeline just to fail on submission. The results view is now a
+  submission summary table (event id, corner, wheels off, the verdict
+  and trust scalar the API returned, submit status) plus the boundary-
+  overlay replay video — not a review UI. Reviewing, confirming, and
+  rejecting what gets submitted here now happens exclusively in
+  `console/`.
+
+  Evidence clips (Section 5.9, below) are unaffected by any of this —
+  `app.py` still renders them locally for a calibrated run and now
+  passes the path along in the submission (`EvaluateRequest` grew an
+  optional `evidence_clip_path: str | None` field that `src/api/`
+  passes straight through onto `StewardItem`, tested in
+  `tests/test_api.py`); `console/`'s card already renders whatever
+  string is there, so a submitted clip's path shows up in `console/`
+  instead of the always-`None` it was before. It still isn't a video
+  player in `console/` — that path is meaningful only when `console/`,
+  `src/api/`, and whoever ran `app.py` share a filesystem, since there's
+  no static-file route serving clips over HTTP yet; a stated, not
+  hidden, next gap.
+
+  Verified for real: with a live `uvicorn src.api.main:app` running,
+  the exact JSON shape `app.py` now constructs (`event`, `evidence`,
+  `evidence_clip_path`) was POSTed directly at `/events` and confirmed
+  to come back with a real Tier 2/4 verdict, a computed trust scalar,
+  and the clip path passed straight through. `streamlit run app.py`
+  itself boots clean in a headless browser, both against a reachable
+  API (green "API reachable" sidebar message) and against none running
+  at all (a clear, direct error rather than a stack trace). Running the
+  actual YOLO pass end-to-end still needs `ultralytics` + weights,
+  unavailable in this sandbox — same standing limitation as every other
+  CV-pipeline change in this project.
 
 - `console/` (Section 5.10, Tier 5 frontend) — a real React + Vite (plain
   JS) steward console for `src/api/main.py`, not a mock. `src/api.js` is
@@ -128,8 +188,11 @@ agent, trust/calibration, the steward console) sits on top of:
   steward id/session type toolbar, and a per-corner drift banner
   together. `StewardItemCard.jsx` follows Section 5.10 literally:
   evidence (measurements, the Tier 2 description + authority,
-  exceptions evaluated, an honestly-labelled clip placeholder since no
-  clip storage exists yet) renders before `TrustBars.jsx`'s five
+  exceptions evaluated, a clip field that shows `evidence_clip_path`
+  when `app.py` submitted one, and an honest "not attached" message when
+  it didn't — still text either way, not a `<video>` player, since
+  there's no static-file route serving clips over HTTP yet) renders
+  before `TrustBars.jsx`'s five
   separate bars, which render before the Tier 3 agent's both-sides
   reasoning (if present), which renders before **the verdict badge,
   last** — "showing the conclusion first anchors the steward and
@@ -228,7 +291,7 @@ agent, trust/calibration, the steward console) sits on top of:
   production.
 
 Run the tests: `pip install -r requirements.txt && python3 -m pytest`
-(186 tests + 1 skipped without an API key, including the five Section 5.6
+(200 tests + 1 skipped without an API key, including the five Section 5.6
 requires verbatim and the Section 5.1 round-trip acceptance criterion).
 `console/` has its own toolchain — see `console/README.md` for how to run
 it against a live API.
@@ -249,26 +312,22 @@ present measurement. The only Tier 2-level abstention is missing data.
 - `src/telemetry/` (Tier 0, FastF1) — nothing produces a real telemetry
   `CarState` stream; the telemetry branch in the architecture diagram
   remains synthetic-data-only.
-- `src/vision/` as its own package (Section 5.3's proposed
-  `calibrate.py`/`detect.py`/`contact.py`/`project.py` layout) — the
-  underlying capability (homography, per-wheel kinematics, a real
-  `TrackFrame`/`Boundary` for a calibrated clip) is real now (see the CV
-  demo pipeline section below), just not organised as that package, and
-  still single-vehicle (no ByteTrack/persistent IDs) with a numeric
-  calibration form rather than an interactive click tool.
+- `src/vision/` now exists as its own package (below) with Section 5.3's
+  proposed `calibrate.py`/`detect.py`/`contact.py`/`project.py` layout.
+  Still true: single-vehicle tracking (no ByteTrack/persistent IDs), a
+  numeric calibration form rather than an interactive click tool, and
   `model_confidence` in `trust/` is still a caller-supplied score —
   nothing produces one from real data yet.
-- `src/agent/` is wired into `src/api/` now (above), but not into
-  `app.py` — the Streamlit demo still evaluates findings directly,
-  in-process, with no agent call.
-- `console/` is now built (above) and is the real frontend for
-  `src/api/`'s queue. `app.py`'s Streamlit UI remains a separate,
-  older surface that doesn't talk to the API — it evaluates and reviews
-  findings directly, in-process — and still needs reconciling with (or
-  retiring in favour of) `console/`. `src/render/overlay.py` is built
-  (above) but not wired into either `app.py` or `src/api/` yet — nothing
-  calls it end-to-end with real detection output, so neither
-  steward-facing surface can show an evidence clip yet.
+- `src/agent/` runs server-side, in `src/api/` — the only place a
+  finding is evaluated now (below, "`app.py` is retired as a steward
+  review surface").
+- `console/` (above) is the only steward review surface now — `app.py`
+  no longer duplicates it (below). `src/render/overlay.py` is wired into
+  `app.py`'s pipeline run (`src/render/incident.py`, below) for
+  calibrated clips, and the resulting path now flows through
+  `src/api/` to `console/` too (`EvaluateRequest.evidence_clip_path`) —
+  but `console/`'s card still only shows that path as text, not a
+  `<video>` player, since nothing serves clip files over HTTP yet.
 - `src/eval/scrape_fia.py` — parsing real FIA stewards' decision documents
   into ground truth. `src/eval/metrics.py` (above) is built and tested,
   just with no real labelled data to run it against yet.
@@ -300,11 +359,12 @@ rewired onto the real core above rather than patched in place:
   every candidate event honestly carries `wheels_off_peak = None` and the
   `RuleEngine` correctly reports `INSUFFICIENT_EVIDENCE`, rather than the
   pipeline asserting a violation it has no contact-patch evidence for.
-- **With calibration, this is no longer permanent.** `src/calibration.py`
+- **With calibration, this is no longer permanent.** `src/vision/calibrate.py`
   fits a real homography from operator-supplied point correspondences
   (`cv2.findHomography`, no hardcoded clip-specific matrix);
-  `src/kinematics.py` turns one tracked point into four real wheel
-  positions from car centre + heading; `track/build.py`'s
+  `src/vision/contact.py` turns one tracked point into four real wheel
+  positions from car centre + heading (`wheel_world_positions`) and each
+  one's signed distance to the boundary (`wheel_margins`); `track/build.py`'s
   `build_straight_segment_track` gives a calibrated clip a real
   `TrackFrame`/`Boundary` (a straight local model, valid near the
   calibrated segment only — reusing the same classes the rest of the
@@ -320,10 +380,11 @@ rewired onto the real core above rather than patched in place:
   `tests/test_detector_calibrated.py` proves both outcomes (a genuine
   4-wheel violation and a genuine 2-wheels-legal no-violation) through
   the real pipeline, not a mock.
-- `app.py` no longer shows any fabricated number in either mode. Strikes
-  move only when a steward clicks **Confirm Violation**, via
-  `EscalationEngine.increment_strike` and `OverrideLog`, exactly as
-  everywhere else in this project.
+- `app.py` no longer shows any fabricated number in either mode, and (as
+  of the retirement described below) no longer applies strikes itself at
+  all — every candidate event is submitted to `src/api/`, and
+  `EscalationEngine.increment_strike` only ever runs there, reached
+  exclusively through a steward clicking Confirm in `console/`.
 
 Writing `build_straight_segment_track`'s tests caught a real geometry bug:
 the fabricated closed loop's "return path" (TrackFrame needs one) was
@@ -334,10 +395,67 @@ the return path by 500m instead, comfortably past any realistic track
 half-width. See the regression test and the comment at
 `track/build.py`'s `_SLIVER_WIDTH_M`.
 
-Section 5.3's proposed file layout (`src/vision/calibrate.py`,
-`detect.py`, `contact.py`, `project.py`) still doesn't exist as its own
-package — this calibration/kinematics capability lives in the top-level
-demo modules instead. Also still true: single dominant-vehicle tracking
-(no per-car ID/ByteTrack), and `calibrate.py`'s spec describes an
-*interactive* click-to-pick tool; `app.py`'s form is numeric entry against
-a still-frame preview, not a click canvas.
+**`src/vision/` now exists as Section 5.3's proposed package**
+(`calibrate.py`, `contact.py`, `project.py`, `detect.py`):
+`calibrate.py` and `contact.py` are exactly the modules described just
+above, moved out of the top-level `src/calibration.py`/`src/kinematics.py`
+they used to be (deleted, not kept as re-export shims — every importer,
+`app.py` and `src/detector.py` included, points at the new location
+directly). `project.py` holds `apply_homography`/`project_boundary_edge`
+(world geometry projected into image space), moved out of
+`src/render/overlay.py`, which now imports them back rather than defining
+them — used by both the live detector overlay and the replay clip
+export, not duplicated between the two. `detect.py` is new, not just
+moved: it extracts the YOLO vehicle-filtering logic that used to be two
+separate, subtly-duplicated inline loops inside `src/detector.py`
+(`_best_detection` for the calibrated path, an unnamed loop for the
+uncalibrated one) into `iter_vehicle_detections`/`best_vehicle_detection`,
+sharing one implementation, plus `load_yolo_model` for the same deferred
+`ultralytics` import `src/detector.py` used to do inline. This is also
+the first time that filtering logic has had direct test coverage
+(`tests/test_vision_detect.py`, 7 tests against a tiny fake `results.boxes`
+object) — previously it was only reachable through a full YOLO run, which
+nothing in this sandbox can do. `src/detector.py`'s public behaviour is
+unchanged by any of this — its return type grew from `(Finding,
+Verdict)` to `(ExcursionEvent, Finding, Verdict)` per finding in the
+previous change (`src/review_queue.py`'s trust computation, above), not
+this one.
+
+Still true: single dominant-vehicle tracking (no per-car ID/ByteTrack),
+and `calibrate.py`'s spec describes an *interactive* click-to-pick tool;
+`app.py`'s form is numeric entry against a still-frame preview, not a
+click canvas.
+
+**Evidence clips (Section 5.9) are now real for calibrated runs.**
+`src/render/incident.py`'s `build_incident_annotations` is the missing
+piece between a live pipeline run and `render_incident_clip`, which
+previously only had synthetic test inputs: given the `CarState`s a run
+already captured, it recovers each one's `frame_id` from
+`session_time = frame_id / fps` (an exact round-trip, not a guess),
+filters to whichever states fall inside `[event.t_onset, event.t_reentry]`,
+and rebuilds each one's four wheel world positions
+(`src.vision.contact.wheel_world_positions`) into a `FrameAnnotation`.
+`app.py` keeps a raw (undecorated) copy of every frame while a calibrated
+run is in progress — `detector.process_frame` draws directly onto its
+argument, so the copy has to happen first — and after the trust/agent
+pass, calls `render_incident_clip` per finding with whichever raw frames
+match that event's window, writing to `data/clips/<event_id>.mp4`
+(already `.gitignore`d, alongside `data/overrides/`). A finding whose
+window has no matching captured frame (or whose render fails for any
+reason) just shows "Evidence clip not available" rather than blocking
+the rest of the queue — same advisory-only failure isolation as
+everywhere else in this project. Uncalibrated runs skip this entirely:
+every uncalibrated finding is `INSUFFICIENT_EVIDENCE` already, so there's
+no per-wheel geometry a clip could usefully draw.
+
+`src/api/` still doesn't produce clips — it evaluates one `ExcursionEvent`
+per HTTP request with no raw frames attached at all, so there's nothing
+for `render_incident_clip` to draw from on that path yet.
+`build_incident_annotations` is covered by 5 new tests
+(`tests/test_render_incident.py`) against synthetic `CarState`s — no
+video, no YOLO, no Streamlit needed. The `app.py` wiring itself was
+verified by booting `streamlit run app.py` in a headless browser after
+the change (clean, no exception banner); actually producing a clip
+still needs a real pipeline run, which needs `ultralytics` + YOLO
+weights unavailable in this sandbox — the same standing limitation as
+every other CV-pipeline change in this project.

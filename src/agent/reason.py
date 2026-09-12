@@ -230,3 +230,18 @@ def reason_about_finding(
         )
     except ValueError as exc:
         raise MalformedAgentOutput(f"agent output had an invalid recommendation value: {exc}") from exc
+
+
+def format_agent_reasoning(reasoning: AgentReasoning) -> str:
+    """Section 5.8's mandatory output template, verbatim field order.
+    Shared by every steward-facing surface (src/api/, app.py) so the
+    template lives in exactly one place.
+    """
+    return (
+        f"FINDING: {reasoning.finding_restated}\n"
+        f"CASE FOR VIOLATION: {reasoning.case_for_violation}\n"
+        f"CASE AGAINST: {reasoning.case_against}\n"
+        f"MISSING EVIDENCE: {reasoning.missing_evidence}\n"
+        f"PRECEDENTS THIS SESSION: {reasoning.precedents_this_session}\n"
+        f"RECOMMENDATION: {reasoning.recommendation.value}"
+    )

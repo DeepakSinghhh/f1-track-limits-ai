@@ -29,7 +29,7 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 
-from src.agent.reason import AgentReasoning, reason_about_finding
+from src.agent.reason import format_agent_reasoning, reason_about_finding
 from src.agent.tools import AgentContext
 from src.audit.log import OverrideLog
 from src.config import load_event_config
@@ -69,6 +69,12 @@ class EvidenceContext:
 class EvaluateRequest:
     event: ExcursionEvent
     evidence: EvidenceContext = field(default_factory=EvidenceContext)
+    # A local filesystem path a submitting pipeline (app.py) already
+    # rendered a clip to (src/render/incident.py + render_incident_clip).
+    # Passed through as-is -- this API has no clip storage of its own and
+    # does not validate the path resolves anywhere, since it may not
+    # share a filesystem with whoever renders console/'s response.
+    evidence_clip_path: str | None = None
 
 
 @dataclass
@@ -103,18 +109,6 @@ class QueueBroadcaster:
 
 def _serialize_item(item: StewardItem) -> dict:
     return jsonable_encoder(item)
-
-
-def _format_agent_reasoning(reasoning: AgentReasoning) -> str:
-    """Section 5.8's mandatory output template, verbatim field order."""
-    return (
-        f"FINDING: {reasoning.finding_restated}\n"
-        f"CASE FOR VIOLATION: {reasoning.case_for_violation}\n"
-        f"CASE AGAINST: {reasoning.case_against}\n"
-        f"MISSING EVIDENCE: {reasoning.missing_evidence}\n"
-        f"PRECEDENTS THIS SESSION: {reasoning.precedents_this_session}\n"
-        f"RECOMMENDATION: {reasoning.recommendation.value}"
-    )
 
 
 def create_app(
@@ -186,7 +180,7 @@ def create_app(
                 reasoning = await asyncio.to_thread(
                     reason_about_finding, app.state.agent_client, finding, agent_context
                 )
-                agent_reasoning_text = _format_agent_reasoning(reasoning)
+                agent_reasoning_text = format_agent_reasoning(reasoning)
             except Exception:
                 # Advisory only: a failed or slow agent call must never
                 # block or fail the finding submission itself.
@@ -197,7 +191,7 @@ def create_app(
             trust=trust,
             verdict=final_verdict,
             agent_reasoning=agent_reasoning_text,
-            evidence_clip_path=None,
+            evidence_clip_path=payload.evidence_clip_path,
             precedents=[],
             priority=trust.scalar,
         )

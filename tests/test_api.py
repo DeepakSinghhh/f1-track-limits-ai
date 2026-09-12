@@ -39,6 +39,18 @@ def event_payload(**overrides):
     return {"event": asdict(event)}
 
 
+def test_evidence_clip_path_is_passed_through_when_supplied(client):
+    payload = event_payload(corner=1)
+    payload["evidence_clip_path"] = "data/clips/evt-1.mp4"
+    item = client.post("/events", json=payload).json()
+    assert item["evidence_clip_path"] == "data/clips/evt-1.mp4"
+
+
+def test_evidence_clip_path_defaults_to_none(client):
+    item = client.post("/events", json=event_payload(corner=1)).json()
+    assert item["evidence_clip_path"] is None
+
+
 def test_cors_allows_a_browser_frontend_on_a_different_origin(client):
     resp = client.get("/health", headers={"Origin": "http://localhost:5173"})
     assert resp.headers.get("access-control-allow-origin") == "*"
