@@ -266,7 +266,7 @@ agent, trust/calibration, the steward console) sits on top of:
   production.
 
 Run the tests: `pip install -r requirements.txt && python3 -m pytest`
-(199 tests + 1 skipped without an API key, including the five Section 5.6
+(204 tests + 1 skipped without an API key, including the five Section 5.6
 requires verbatim and the Section 5.1 round-trip acceptance criterion).
 `console/` has its own toolchain — see `console/README.md` for how to run
 it against a live API.
@@ -299,10 +299,11 @@ present measurement. The only Tier 2-level abstention is missing data.
   `src/api/`'s queue. `app.py`'s Streamlit UI remains a separate,
   older surface that doesn't talk to the API — it evaluates and reviews
   findings directly, in-process — and still needs reconciling with (or
-  retiring in favour of) `console/`. `src/render/overlay.py` is built
-  (above) but not wired into either `app.py` or `src/api/` yet — nothing
-  calls it end-to-end with real detection output, so neither
-  steward-facing surface can show an evidence clip yet.
+  retiring in favour of) `console/`. `src/render/overlay.py` is now
+  wired into `app.py` (below, `src/render/incident.py`) for calibrated
+  runs, but still not into `src/api/` — `console/`'s clip placeholder
+  stays honest ("not attached") until a finding submitted over HTTP
+  carries one.
 - `src/eval/scrape_fia.py` — parsing real FIA stewards' decision documents
   into ground truth. `src/eval/metrics.py` (above) is built and tested,
   just with no real labelled data to run it against yet.
@@ -399,3 +400,37 @@ Still true: single dominant-vehicle tracking (no per-car ID/ByteTrack),
 and `calibrate.py`'s spec describes an *interactive* click-to-pick tool;
 `app.py`'s form is numeric entry against a still-frame preview, not a
 click canvas.
+
+**Evidence clips (Section 5.9) are now real for calibrated runs.**
+`src/render/incident.py`'s `build_incident_annotations` is the missing
+piece between a live pipeline run and `render_incident_clip`, which
+previously only had synthetic test inputs: given the `CarState`s a run
+already captured, it recovers each one's `frame_id` from
+`session_time = frame_id / fps` (an exact round-trip, not a guess),
+filters to whichever states fall inside `[event.t_onset, event.t_reentry]`,
+and rebuilds each one's four wheel world positions
+(`src.vision.contact.wheel_world_positions`) into a `FrameAnnotation`.
+`app.py` keeps a raw (undecorated) copy of every frame while a calibrated
+run is in progress — `detector.process_frame` draws directly onto its
+argument, so the copy has to happen first — and after the trust/agent
+pass, calls `render_incident_clip` per finding with whichever raw frames
+match that event's window, writing to `data/clips/<event_id>.mp4`
+(already `.gitignore`d, alongside `data/overrides/`). A finding whose
+window has no matching captured frame (or whose render fails for any
+reason) just shows "Evidence clip not available" rather than blocking
+the rest of the queue — same advisory-only failure isolation as
+everywhere else in this project. Uncalibrated runs skip this entirely:
+every uncalibrated finding is `INSUFFICIENT_EVIDENCE` already, so there's
+no per-wheel geometry a clip could usefully draw.
+
+`src/api/` still doesn't produce clips — it evaluates one `ExcursionEvent`
+per HTTP request with no raw frames attached at all, so there's nothing
+for `render_incident_clip` to draw from on that path yet.
+`build_incident_annotations` is covered by 5 new tests
+(`tests/test_render_incident.py`) against synthetic `CarState`s — no
+video, no YOLO, no Streamlit needed. The `app.py` wiring itself was
+verified by booting `streamlit run app.py` in a headless browser after
+the change (clean, no exception banner); actually producing a clip
+still needs a real pipeline run, which needs `ultralytics` + YOLO
+weights unavailable in this sandbox — the same standing limitation as
+every other CV-pipeline change in this project.

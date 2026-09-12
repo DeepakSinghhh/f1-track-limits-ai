@@ -11,6 +11,8 @@ import subprocess
 from src.agent.tools import AgentContext
 from src.vision.calibrate import CalibrationError, calibrate
 from src.detector import TrackLimitDetector
+from src.render.incident import build_incident_annotations
+from src.render.overlay import render_incident_clip
 from src.review_queue import AGENT_TRUST_THRESHOLD, annotate_findings
 from src.rules.escalation import EscalationEngine, SessionType
 from src.audit.log import OverrideLog
@@ -19,6 +21,7 @@ from src.track.build import build_straight_segment_track
 
 CONFIG_PATH = "config/events/demo_clip.yaml"
 OVERRIDE_LOG_PATH = "data/overrides/demo_session.jsonl"
+EVIDENCE_CLIP_DIR = "data/clips"
 
 
 def render_trust_bars(trust):
@@ -274,12 +277,21 @@ if run_clicked and video_path and os.path.exists(video_path):
         progress_bar = st.progress(0)
         frame_id = 0
 
+        # Raw (undecorated) frames, keyed by frame_id -- only kept for a
+        # calibrated run, and only so build_incident_annotations' matching
+        # frame_ids can be turned into real evidence clips below.
+        # detector.process_frame draws directly onto its `frame` argument,
+        # so the copy must happen before that call.
+        raw_frames_by_id = {}
+
         while cap.isOpened():
             ret, frame = cap.read()
             if not ret:
                 break
 
             frame_id += 1
+            if detector.calibration is not None:
+                raw_frames_by_id[frame_id] = frame.copy()
             proc_frame, frame_findings = detector.process_frame(frame, frame_id)
             out.write(proc_frame)
 
@@ -318,6 +330,40 @@ if run_clicked and video_path and os.path.exists(video_path):
             item["trust"] = ann.trust
             item["display_verdict"] = ann.display_verdict
             item["agent_reasoning"] = ann.agent_reasoning
+            item["evidence_clip_path"] = None
+
+        # --- Evidence clips (Section 5.9), calibrated runs only ---
+        # Only a calibrated run has real per-wheel contact geometry to draw
+        # (src.render.incident.build_incident_annotations needs it); an
+        # uncalibrated finding is always INSUFFICIENT_EVIDENCE anyway, so
+        # there is nothing a clip would usefully show for it.
+        if detector.calibration is not None:
+            os.makedirs(EVIDENCE_CLIP_DIR, exist_ok=True)
+            for item in findings:
+                pairs = build_incident_annotations(
+                    detector._states, item["event"], detector.track_frame, detector.heading_rad, fps
+                )
+                frames, annotations = [], []
+                for fid, annotation in pairs:
+                    raw_frame = raw_frames_by_id.get(fid)
+                    if raw_frame is None:
+                        continue
+                    frames.append(raw_frame)
+                    annotations.append(annotation)
+
+                if not frames:
+                    continue  # no captured frame overlaps this event's window -- honestly show no clip
+
+                clip_path = os.path.join(EVIDENCE_CLIP_DIR, f"{item['finding'].event_id}.mp4")
+                try:
+                    item["evidence_clip_path"] = render_incident_clip(
+                        frames, annotations, item["event"], detector.track_frame, detector.boundary,
+                        detector.calibration.inverse_homography, clip_path, fps,
+                    )
+                except Exception:
+                    # Advisory only -- a failed clip render never blocks the
+                    # rest of the results from showing.
+                    item["evidence_clip_path"] = None
 
         st.session_state.findings = findings
         st.session_state.processed_video = final_out
@@ -378,6 +424,11 @@ if st.session_state.processed_video:
                     "Exceptions evaluated: "
                     + ", ".join(f"{k}={v}" for k, v in finding.exceptions_evaluated.items())
                 )
+
+                if item["evidence_clip_path"]:
+                    st.video(item["evidence_clip_path"])
+                else:
+                    st.caption("Evidence clip not available for this finding.")
 
                 render_trust_bars(trust)
 
