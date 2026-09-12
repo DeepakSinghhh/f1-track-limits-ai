@@ -2,13 +2,16 @@ import math
 
 import streamlit as st
 import cv2
+import groq
 import pandas as pd
 import tempfile
 import os
 import subprocess
 
+from src.agent.tools import AgentContext
 from src.calibration import CalibrationError, calibrate
 from src.detector import TrackLimitDetector
+from src.review_queue import AGENT_TRUST_THRESHOLD, annotate_findings
 from src.rules.escalation import EscalationEngine, SessionType
 from src.audit.log import OverrideLog
 from src.config import load_event_config
@@ -16,6 +19,24 @@ from src.track.build import build_straight_segment_track
 
 CONFIG_PATH = "config/events/demo_clip.yaml"
 OVERRIDE_LOG_PATH = "data/overrides/demo_session.jsonl"
+
+
+def render_trust_bars(trust):
+    """Section 5.7/5.10: five components shown separately, never
+    collapsed into one opaque score.
+    """
+    st.caption("Trust decomposition:")
+    for label, value in [
+        ("Evidence quality", trust.evidence_quality),
+        ("Measurement margin", trust.measurement_margin),
+        ("Model confidence", trust.model_confidence),
+        ("Rule determinacy", trust.rule_determinacy),
+        ("Precedent consistency", trust.precedent_consistency),
+    ]:
+        st.progress(value, text=f"{label}: {value:.2f}")
+    conformal_label = ", ".join(v.value for v in trust.conformal_set)
+    ambiguous = " (ambiguous)" if len(trust.conformal_set) > 1 else ""
+    st.caption(f"Scalar (ranking only): {trust.scalar:.2f} · Conformal set: {conformal_label}{ambiguous}")
 
 st.set_page_config(page_title="Apex Assist — Steward Review Console", layout="wide")
 
@@ -92,6 +113,10 @@ if "processed_video" not in st.session_state:
 
 if "calibration_bundle" not in st.session_state:
     st.session_state.calibration_bundle = None  # (CameraCalibration, TrackFrame, Boundary, heading_rad) or None
+
+if "agent_client" not in st.session_state:
+    _groq_key = os.environ.get("GROQ_API_KEY")
+    st.session_state.agent_client = groq.Groq(api_key=_groq_key) if _groq_key else None
 
 # --- SIDEBAR: INGESTION & CONFIG ---
 st.sidebar.markdown("### <i class='fa-solid fa-sliders'></i> Pipeline Ingestion", unsafe_allow_html=True)
@@ -178,6 +203,19 @@ conf_threshold = st.sidebar.slider("YOLO Confidence Threshold", 0.3, 0.95, 0.5)
 min_duration_frames = st.sidebar.slider("Minimum Event Duration (frames)", 1, 15, 4)
 steward_id = st.sidebar.text_input("Steward ID", value="steward-1")
 
+if st.session_state.agent_client is not None:
+    st.sidebar.caption(
+        f"**Tier 3 agent: enabled.** Findings with trust scalar below "
+        f"{AGENT_TRUST_THRESHOLD} get a real Groq reasoning pass, shown "
+        f"below the trust bars on that card."
+    )
+else:
+    st.sidebar.caption(
+        "**Tier 3 agent: disabled** (no `GROQ_API_KEY` in the environment). "
+        "Trust bars and the Tier 4 abstention decision still run — only the "
+        "agent's both-sides reasoning is skipped."
+    )
+
 st.sidebar.markdown("---")
 if st.session_state.calibration_bundle is not None:
     st.sidebar.caption(
@@ -245,14 +283,14 @@ if run_clicked and video_path and os.path.exists(video_path):
             proc_frame, frame_findings = detector.process_frame(frame, frame_id)
             out.write(proc_frame)
 
-            for finding, verdict in frame_findings:
-                findings.append({"finding": finding, "verdict": verdict, "decision": None})
+            for event, finding, verdict in frame_findings:
+                findings.append({"event": event, "finding": finding, "verdict": verdict, "decision": None})
 
             if frame_id % 5 == 0:
                 progress_bar.progress(min(frame_id / total_frames, 1.0))
 
-        for finding, verdict in detector.finalize(frame_id):
-            findings.append({"finding": finding, "verdict": verdict, "decision": None})
+        for event, finding, verdict in detector.finalize(frame_id):
+            findings.append({"event": event, "finding": finding, "verdict": verdict, "decision": None})
 
         cap.release()
         out.release()
@@ -263,6 +301,23 @@ if run_clicked and video_path and os.path.exists(video_path):
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
+
+        # --- TIER 4 (trust) + TIER 3 (agent, on the ambiguous slice) ---
+        # src/review_queue.annotate_findings is the same computation
+        # src/api/main.py runs per POST /events, applied here in one batch
+        # now that the full findings list exists.
+        annotated = annotate_findings(
+            [(item["event"], item["finding"], item["verdict"]) for item in findings],
+            reproj_error_px=(
+                detector.calibration.reprojection_error_px if detector.calibration is not None else None
+            ),
+            agent_context=AgentContext(config=load_event_config(CONFIG_PATH)),
+            agent_client=st.session_state.agent_client,
+        )
+        for item, ann in zip(findings, annotated):
+            item["trust"] = ann.trust
+            item["display_verdict"] = ann.display_verdict
+            item["agent_reasoning"] = ann.agent_reasoning
 
         st.session_state.findings = findings
         st.session_state.processed_video = final_out
@@ -307,15 +362,37 @@ if st.session_state.processed_video:
 
         for i, item in enumerate(findings):
             finding = item["finding"]
-            verdict = item["verdict"]
+            tier2_verdict = item["verdict"]
+            trust = item["trust"]
+            display_verdict = item["display_verdict"]
             with st.container(border=True):
+                # Evidence first (Section 5.10): identifiers, description,
+                # authority, and exceptions all come before any trust
+                # signal or verdict — showing the conclusion first anchors
+                # the steward and destroys the independence that makes
+                # human review valuable.
                 st.markdown(f"**Event `{finding.event_id[:8]}`** · session time `{finding.session_time}`")
                 st.caption(finding.description)
-                st.caption(f"Verdict: `{verdict.value}` · Authority: {', '.join(finding.authority)}")
+                st.caption(f"Authority: {', '.join(finding.authority)}")
                 st.caption(
                     "Exceptions evaluated: "
                     + ", ".join(f"{k}={v}" for k, v in finding.exceptions_evaluated.items())
                 )
+
+                render_trust_bars(trust)
+
+                if item["agent_reasoning"]:
+                    with st.expander("🤖 Tier 3 agent reasoning (advisory, not a verdict)"):
+                        st.text(item["agent_reasoning"])
+
+                verdict_label = display_verdict.value.replace("_", " ").upper()
+                if display_verdict == tier2_verdict:
+                    st.markdown(f"**Verdict: `{verdict_label}`**")
+                else:
+                    st.markdown(
+                        f"**Verdict: `{verdict_label}`** — Tier 4 downgraded Tier 2's own "
+                        f"`{tier2_verdict.value}` finding on low trust (see bars above)."
+                    )
 
                 if item["decision"] is None:
                     c1, c2 = st.columns(2)

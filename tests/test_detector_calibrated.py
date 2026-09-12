@@ -96,9 +96,10 @@ def test_finalize_produces_a_real_violation_for_a_sustained_offtrack_run():
 
     results = detector.finalize(frame_id=12)
     assert len(results) == 1
-    finding, verdict = results[0]
+    event, finding, verdict = results[0]
     assert verdict == Verdict.VIOLATION
     assert finding.violation is True
+    assert event.corner == detector.corner
 
 
 def test_finalize_abstains_correctly_off_the_real_pipeline_too():
@@ -111,8 +112,9 @@ def test_finalize_abstains_correctly_off_the_real_pipeline_too():
 
     results = detector.finalize(frame_id=12)
     assert len(results) == 1
-    finding, verdict = results[0]
+    event, finding, verdict = results[0]
     assert verdict != Verdict.VIOLATION
+    assert event.wheels_off_peak == 2
 
 
 def test_finalize_with_no_states_returns_nothing():

@@ -116,10 +116,48 @@ agent, trust/calibration, the steward console) sits on top of:
   skipped under high trust, failure isolation, and the disabled-by-default
   case) using the same scripted fake Groq client as `src/agent/`'s own
   tests (now shared from `tests/fake_groq.py` instead of duplicated).
-  `app.py` does not call the agent yet — this wiring is API-only so far.
   CORS is enabled (`allow_origins=["*"]`, permissive by design for a local
   demo API with no auth of its own) specifically so `console/` — running
   on a different dev port — can reach it.
+
+- `src/review_queue.py` (Tiers 3+4, shared) — `app.py` now runs the same
+  trust + agent computation as `src/api/main.py`, factored out here since
+  `app.py` annotates a whole clip's findings in one batch rather than one
+  HTTP request at a time. `annotate_findings` takes the
+  `(ExcursionEvent, Finding, Verdict)` triples `TrackLimitDetector` now
+  returns (previously just `(Finding, Verdict)` — extending that tuple
+  was the one breaking API change here, since `measurement_margin` and
+  `rule_determinacy` both need the event, not just the finding, and
+  `app.py` had never computed trust at all before this) and returns a
+  `TrustVector` plus a Tier-4 `display_verdict` per finding, exactly the
+  way `decide_verdict` downgrades Tier 2's own verdict to
+  `INSUFFICIENT_EVIDENCE` on low trust and never upgrades one into a
+  violation Tier 2 didn't find. The Tier 3 agent runs on whatever lands
+  below the same 0.5 threshold, using the same `format_agent_reasoning`
+  template (now a single shared function in `src/agent/reason.py` instead
+  of duplicated in `src/api/main.py`). `app.py`'s sidebar constructs a
+  `groq.Groq` client from `GROQ_API_KEY` if the environment has one and
+  says plainly whether the agent is enabled; with no key, trust bars and
+  the Tier 4 abstention decision still run, only the agent step is
+  skipped, matching the API's own optional wiring. Every finding card
+  keeps the evidence-before-verdict order from Section 5.10 that
+  `console/` established: description/authority/exceptions, then the
+  five trust bars, then the agent's both-sides reasoning if present, then
+  the verdict last — and when Tier 4 downgrades Tier 2's own verdict, the
+  card says so explicitly rather than just quietly showing the milder
+  one. 6 new tests (`tests/test_review_queue.py`) cover high-trust
+  pass-through, low-trust downgrade + agent trigger, no-agent-configured,
+  agent-failure isolation, and that precedent consistency accumulates
+  per corner in submission order — all against synthetic findings, no
+  Streamlit/YOLO/network needed. Verified for real, not just unit-tested:
+  `streamlit run app.py` was started and loaded in a headless browser —
+  boots clean, no exception banner, and the new "Tier 3 agent:
+  disabled/enabled" sidebar caption renders correctly. Running the
+  detection pipeline itself (the part that needs `ultralytics` + YOLO
+  weights) still can't be exercised in this sandbox — same limitation as
+  every other CV-pipeline change in this project — so the trust/agent
+  wiring inside that code path is verified via `src/review_queue.py`'s
+  own tests, not an end-to-end pipeline run.
 
 - `console/` (Section 5.10, Tier 5 frontend) — a real React + Vite (plain
   JS) steward console for `src/api/main.py`, not a mock. `src/api.js` is
@@ -228,7 +266,7 @@ agent, trust/calibration, the steward console) sits on top of:
   production.
 
 Run the tests: `pip install -r requirements.txt && python3 -m pytest`
-(186 tests + 1 skipped without an API key, including the five Section 5.6
+(192 tests + 1 skipped without an API key, including the five Section 5.6
 requires verbatim and the Section 5.1 round-trip acceptance criterion).
 `console/` has its own toolchain — see `console/README.md` for how to run
 it against a live API.
@@ -258,9 +296,8 @@ present measurement. The only Tier 2-level abstention is missing data.
   calibration form rather than an interactive click tool.
   `model_confidence` in `trust/` is still a caller-supplied score —
   nothing produces one from real data yet.
-- `src/agent/` is wired into `src/api/` now (above), but not into
-  `app.py` — the Streamlit demo still evaluates findings directly,
-  in-process, with no agent call.
+- `src/agent/` is now wired into both steward-facing surfaces — `src/api/`
+  directly, `app.py` via the shared `src/review_queue.py` (above).
 - `console/` is now built (above) and is the real frontend for
   `src/api/`'s queue. `app.py`'s Streamlit UI remains a separate,
   older surface that doesn't talk to the API — it evaluates and reviews

@@ -30,7 +30,7 @@ from src.geofence import ZoneCrossingTracker
 from src.kinematics import wheel_world_positions
 from src.render.overlay import draw_boundary_overlay, draw_contact_points, project_boundary_edge, wheel_margins
 from src.rules.engine import RuleEngine
-from src.schemas import CarState, Finding, Verdict
+from src.schemas import CarState, ExcursionEvent, Finding, Verdict
 from src.track.boundary import Boundary
 from src.track.frame import TrackFrame
 
@@ -89,7 +89,9 @@ class TrackLimitDetector:
             self._model = YOLO("yolov8n.pt")
         return self._model
 
-    def process_frame(self, frame, frame_id: int) -> tuple[np.ndarray, list[tuple[Finding, Verdict]]]:
+    def process_frame(
+        self, frame, frame_id: int
+    ) -> tuple[np.ndarray, list[tuple[ExcursionEvent, Finding, Verdict]]]:
         results = self.model(frame, verbose=False)[0]
 
         if self.calibration is not None:
@@ -220,14 +222,15 @@ class TrackLimitDetector:
                 2,
             )
 
-        findings: list[tuple[Finding, Verdict]] = []
+        findings: list[tuple[ExcursionEvent, Finding, Verdict]] = []
         event = self.tracker.update(any_violating, frame_id)
         if event is not None:
-            findings.append(self.rule_engine.evaluate(event))
+            finding, verdict = self.rule_engine.evaluate(event)
+            findings.append((event, finding, verdict))
 
         return frame, findings
 
-    def finalize(self, frame_id: int) -> list[tuple[Finding, Verdict]]:
+    def finalize(self, frame_id: int) -> list[tuple[ExcursionEvent, Finding, Verdict]]:
         """Call once after the frame loop ends."""
         if self.calibration is not None:
             if not self._states:
@@ -235,9 +238,10 @@ class TrackLimitDetector:
             events = localise_events(
                 self._states, self.boundary, corner_of=lambda s: self.corner, lap_of=lambda t: 0
             )
-            return [self.rule_engine.evaluate(e) for e in events]
+            return [(e, *self.rule_engine.evaluate(e)) for e in events]
 
         event = self.tracker.close(frame_id)
         if event is None:
             return []
-        return [self.rule_engine.evaluate(event)]
+        finding, verdict = self.rule_engine.evaluate(event)
+        return [(event, finding, verdict)]

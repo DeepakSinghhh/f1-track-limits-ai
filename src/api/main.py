@@ -29,7 +29,7 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 
-from src.agent.reason import AgentReasoning, reason_about_finding
+from src.agent.reason import format_agent_reasoning, reason_about_finding
 from src.agent.tools import AgentContext
 from src.audit.log import OverrideLog
 from src.config import load_event_config
@@ -105,18 +105,6 @@ def _serialize_item(item: StewardItem) -> dict:
     return jsonable_encoder(item)
 
 
-def _format_agent_reasoning(reasoning: AgentReasoning) -> str:
-    """Section 5.8's mandatory output template, verbatim field order."""
-    return (
-        f"FINDING: {reasoning.finding_restated}\n"
-        f"CASE FOR VIOLATION: {reasoning.case_for_violation}\n"
-        f"CASE AGAINST: {reasoning.case_against}\n"
-        f"MISSING EVIDENCE: {reasoning.missing_evidence}\n"
-        f"PRECEDENTS THIS SESSION: {reasoning.precedents_this_session}\n"
-        f"RECOMMENDATION: {reasoning.recommendation.value}"
-    )
-
-
 def create_app(
     config_path: str = "config/events/red_bull_ring_2023.yaml",
     override_log_path: str = "data/overrides/api_session.jsonl",
@@ -186,7 +174,7 @@ def create_app(
                 reasoning = await asyncio.to_thread(
                     reason_about_finding, app.state.agent_client, finding, agent_context
                 )
-                agent_reasoning_text = _format_agent_reasoning(reasoning)
+                agent_reasoning_text = format_agent_reasoning(reasoning)
             except Exception:
                 # Advisory only: a failed or slow agent call must never
                 # block or fail the finding submission itself.
