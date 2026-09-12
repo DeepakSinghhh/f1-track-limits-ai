@@ -9,7 +9,7 @@ import os
 import subprocess
 
 from src.agent.tools import AgentContext
-from src.calibration import CalibrationError, calibrate
+from src.vision.calibrate import CalibrationError, calibrate
 from src.detector import TrackLimitDetector
 from src.review_queue import AGENT_TRUST_THRESHOLD, annotate_findings
 from src.rules.escalation import EscalationEngine, SessionType

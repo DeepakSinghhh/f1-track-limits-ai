@@ -10,10 +10,11 @@ Two modes, chosen by whether a calibration is supplied:
   wheels_off_peak is always None -- honestly, since there is no per-wheel
   or metric data -- and the rule engine correctly reports
   INSUFFICIENT_EVIDENCE for every candidate.
-- Calibrated: with a real homography (src.calibration) and a track model
-  for this clip's visible span (src.track.build.build_straight_segment_track),
-  every frame's best detection becomes a real CarState with real per-wheel
-  positions (src.kinematics), fed straight into the actual Tier 1
+- Calibrated: with a real homography (src.vision.calibrate) and a track
+  model for this clip's visible span
+  (src.track.build.build_straight_segment_track), every frame's best
+  detection becomes a real CarState with real per-wheel positions
+  (src.vision.contact), fed straight into the actual Tier 1
   (src.events.localise) and Tier 2 pipeline -- the same modules the rest
   of this project uses, not a parallel implementation. This is what
   produces genuine VIOLATION findings instead of permanent abstention.
@@ -23,19 +24,18 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
-from src.calibration import CameraCalibration
 from src.config import EventConfig, load_event_config
 from src.events.localise import localise_events
 from src.geofence import ZoneCrossingTracker
-from src.kinematics import wheel_world_positions
-from src.render.overlay import draw_boundary_overlay, draw_contact_points, project_boundary_edge, wheel_margins
+from src.render.overlay import draw_boundary_overlay, draw_contact_points
 from src.rules.engine import RuleEngine
 from src.schemas import CarState, ExcursionEvent, Finding, Verdict
 from src.track.boundary import Boundary
 from src.track.frame import TrackFrame
-
-#: COCO class ids this pipeline treats as vehicles: car, motorcycle, bus, truck.
-VEHICLE_CLASS_IDS = {2, 3, 5, 7}
+from src.vision.calibrate import CameraCalibration
+from src.vision.contact import wheel_margins, wheel_world_positions
+from src.vision.detect import best_vehicle_detection, iter_vehicle_detections, load_yolo_model
+from src.vision.project import project_boundary_edge
 
 #: How much of the calibrated track either side of the current car to draw
 #: the boundary overlay for -- cosmetic only, has no effect on findings.
@@ -84,9 +84,7 @@ class TrackLimitDetector:
     @property
     def model(self):
         if self._model is None:
-            from ultralytics import YOLO  # deferred: geometry-only use (tests, calibration) needs no YOLO/torch at all
-
-            self._model = YOLO("yolov8n.pt")
+            self._model = load_yolo_model()  # deferred: geometry-only use (tests, calibration) needs no YOLO/torch at all
         return self._model
 
     def process_frame(
@@ -99,17 +97,6 @@ class TrackLimitDetector:
         return self._process_frame_uncalibrated(frame, frame_id, results)
 
     # ---- calibrated path ----
-
-    def _best_detection(self, results):
-        best_box, best_conf = None, -1.0
-        for box in results.boxes:
-            if int(box.cls) not in VEHICLE_CLASS_IDS:
-                continue
-            conf = float(box.conf)
-            if conf < self.conf_threshold or conf <= best_conf:
-                continue
-            best_box, best_conf = box, conf
-        return best_box
 
     def car_state_from_reference_point(self, u: float, v: float, frame_id: int) -> CarState:
         """The pure geometry step of the calibrated path: one image
@@ -140,7 +127,7 @@ class TrackLimitDetector:
         )
 
     def _process_frame_calibrated(self, frame, frame_id, results):
-        box = self._best_detection(results)
+        box = best_vehicle_detection(results, self.conf_threshold)
 
         if box is not None:
             x1, y1, x2, y2 = map(int, box.xyxy[0])
@@ -197,12 +184,7 @@ class TrackLimitDetector:
         cv2.polylines(frame, [self.demo_zone], isClosed=True, color=(0, 0, 255), thickness=2)
 
         any_violating = False
-        for box in results.boxes:
-            if int(box.cls) not in VEHICLE_CLASS_IDS:
-                continue
-            if float(box.conf) < self.conf_threshold:
-                continue
-
+        for box in iter_vehicle_detections(results, self.conf_threshold):
             x1, y1, x2, y2 = map(int, box.xyxy[0])
             u, v = int((x1 + x2) / 2), y2  # bottom-centre reference point -- not a contact patch
 

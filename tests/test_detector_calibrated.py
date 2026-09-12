@@ -7,7 +7,7 @@ import math
 
 import pytest
 
-from src.calibration import calibrate
+from src.vision.calibrate import calibrate
 from src.config import load_event_config
 from src.detector import TrackLimitDetector
 from src.schemas import Verdict

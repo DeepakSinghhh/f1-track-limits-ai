@@ -72,8 +72,8 @@ def calibrate(
 
     # Reprojection error: round-trip each supplied world point back through
     # the inverse homography and compare to the pixel it came from. Reported
-    # rather than assumed good -- this is what evidence_quality (trust/) will
-    # eventually read to judge this clip's geometry, once wired in.
+    # rather than assumed good -- this is what evidence_quality (trust/) reads
+    # to judge this clip's geometry.
     errors = []
     for (u, v), (x, y) in zip(image_points, world_points):
         reprojected_u, reprojected_v = _apply(inverse, x, y)

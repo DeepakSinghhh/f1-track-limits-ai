@@ -266,7 +266,7 @@ agent, trust/calibration, the steward console) sits on top of:
   production.
 
 Run the tests: `pip install -r requirements.txt && python3 -m pytest`
-(192 tests + 1 skipped without an API key, including the five Section 5.6
+(199 tests + 1 skipped without an API key, including the five Section 5.6
 requires verbatim and the Section 5.1 round-trip acceptance criterion).
 `console/` has its own toolchain — see `console/README.md` for how to run
 it against a live API.
@@ -287,13 +287,10 @@ present measurement. The only Tier 2-level abstention is missing data.
 - `src/telemetry/` (Tier 0, FastF1) — nothing produces a real telemetry
   `CarState` stream; the telemetry branch in the architecture diagram
   remains synthetic-data-only.
-- `src/vision/` as its own package (Section 5.3's proposed
-  `calibrate.py`/`detect.py`/`contact.py`/`project.py` layout) — the
-  underlying capability (homography, per-wheel kinematics, a real
-  `TrackFrame`/`Boundary` for a calibrated clip) is real now (see the CV
-  demo pipeline section below), just not organised as that package, and
-  still single-vehicle (no ByteTrack/persistent IDs) with a numeric
-  calibration form rather than an interactive click tool.
+- `src/vision/` now exists as its own package (below) with Section 5.3's
+  proposed `calibrate.py`/`detect.py`/`contact.py`/`project.py` layout.
+  Still true: single-vehicle tracking (no ByteTrack/persistent IDs), a
+  numeric calibration form rather than an interactive click tool, and
   `model_confidence` in `trust/` is still a caller-supplied score —
   nothing produces one from real data yet.
 - `src/agent/` is now wired into both steward-facing surfaces — `src/api/`
@@ -337,11 +334,12 @@ rewired onto the real core above rather than patched in place:
   every candidate event honestly carries `wheels_off_peak = None` and the
   `RuleEngine` correctly reports `INSUFFICIENT_EVIDENCE`, rather than the
   pipeline asserting a violation it has no contact-patch evidence for.
-- **With calibration, this is no longer permanent.** `src/calibration.py`
+- **With calibration, this is no longer permanent.** `src/vision/calibrate.py`
   fits a real homography from operator-supplied point correspondences
   (`cv2.findHomography`, no hardcoded clip-specific matrix);
-  `src/kinematics.py` turns one tracked point into four real wheel
-  positions from car centre + heading; `track/build.py`'s
+  `src/vision/contact.py` turns one tracked point into four real wheel
+  positions from car centre + heading (`wheel_world_positions`) and each
+  one's signed distance to the boundary (`wheel_margins`); `track/build.py`'s
   `build_straight_segment_track` gives a calibrated clip a real
   `TrackFrame`/`Boundary` (a straight local model, valid near the
   calibrated segment only — reusing the same classes the rest of the
@@ -371,10 +369,33 @@ the return path by 500m instead, comfortably past any realistic track
 half-width. See the regression test and the comment at
 `track/build.py`'s `_SLIVER_WIDTH_M`.
 
-Section 5.3's proposed file layout (`src/vision/calibrate.py`,
-`detect.py`, `contact.py`, `project.py`) still doesn't exist as its own
-package — this calibration/kinematics capability lives in the top-level
-demo modules instead. Also still true: single dominant-vehicle tracking
-(no per-car ID/ByteTrack), and `calibrate.py`'s spec describes an
-*interactive* click-to-pick tool; `app.py`'s form is numeric entry against
-a still-frame preview, not a click canvas.
+**`src/vision/` now exists as Section 5.3's proposed package**
+(`calibrate.py`, `contact.py`, `project.py`, `detect.py`):
+`calibrate.py` and `contact.py` are exactly the modules described just
+above, moved out of the top-level `src/calibration.py`/`src/kinematics.py`
+they used to be (deleted, not kept as re-export shims — every importer,
+`app.py` and `src/detector.py` included, points at the new location
+directly). `project.py` holds `apply_homography`/`project_boundary_edge`
+(world geometry projected into image space), moved out of
+`src/render/overlay.py`, which now imports them back rather than defining
+them — used by both the live detector overlay and the replay clip
+export, not duplicated between the two. `detect.py` is new, not just
+moved: it extracts the YOLO vehicle-filtering logic that used to be two
+separate, subtly-duplicated inline loops inside `src/detector.py`
+(`_best_detection` for the calibrated path, an unnamed loop for the
+uncalibrated one) into `iter_vehicle_detections`/`best_vehicle_detection`,
+sharing one implementation, plus `load_yolo_model` for the same deferred
+`ultralytics` import `src/detector.py` used to do inline. This is also
+the first time that filtering logic has had direct test coverage
+(`tests/test_vision_detect.py`, 7 tests against a tiny fake `results.boxes`
+object) — previously it was only reachable through a full YOLO run, which
+nothing in this sandbox can do. `src/detector.py`'s public behaviour is
+unchanged by any of this — its return type grew from `(Finding,
+Verdict)` to `(ExcursionEvent, Finding, Verdict)` per finding in the
+previous change (`src/review_queue.py`'s trust computation, above), not
+this one.
+
+Still true: single dominant-vehicle tracking (no per-car ID/ByteTrack),
+and `calibrate.py`'s spec describes an *interactive* click-to-pick tool;
+`app.py`'s form is numeric entry against a still-frame preview, not a
+click canvas.
