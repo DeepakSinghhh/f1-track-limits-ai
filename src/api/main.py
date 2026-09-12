@@ -27,6 +27,7 @@ from dataclasses import dataclass, field
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.encoders import jsonable_encoder
+from fastapi.middleware.cors import CORSMiddleware
 
 from src.agent.reason import AgentReasoning, reason_about_finding
 from src.agent.tools import AgentContext
@@ -122,6 +123,12 @@ def create_app(
     agent_client=None,
 ) -> FastAPI:
     app = FastAPI(title="Apex Assist Steward Console API")
+    # Permissive by design: this is a local demo API with no auth of its
+    # own, meant to be hit from console/ running on a different dev port.
+    # Tighten allow_origins before this is ever deployed anywhere real.
+    app.add_middleware(
+        CORSMiddleware, allow_origins=["*"], allow_credentials=False, allow_methods=["*"], allow_headers=["*"]
+    )
 
     config = load_event_config(config_path)
     app.state.config = config

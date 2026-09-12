@@ -39,6 +39,11 @@ def event_payload(**overrides):
     return {"event": asdict(event)}
 
 
+def test_cors_allows_a_browser_frontend_on_a_different_origin(client):
+    resp = client.get("/health", headers={"Origin": "http://localhost:5173"})
+    assert resp.headers.get("access-control-allow-origin") == "*"
+
+
 def test_health(client):
     resp = client.get("/health")
     assert resp.status_code == 200

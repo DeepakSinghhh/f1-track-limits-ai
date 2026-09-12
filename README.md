@@ -117,6 +117,39 @@ agent, trust/calibration, the steward console) sits on top of:
   case) using the same scripted fake Groq client as `src/agent/`'s own
   tests (now shared from `tests/fake_groq.py` instead of duplicated).
   `app.py` does not call the agent yet — this wiring is API-only so far.
+  CORS is enabled (`allow_origins=["*"]`, permissive by design for a local
+  demo API with no auth of its own) specifically so `console/` — running
+  on a different dev port — can reach it.
+
+- `console/` (Section 5.10, Tier 5 frontend) — a real React + Vite (plain
+  JS) steward console for `src/api/main.py`, not a mock. `src/api.js` is
+  the only module that talks to the backend (REST + the `/ws/queue`
+  WebSocket for live updates); `App.jsx` wires queue state, the
+  steward id/session type toolbar, and a per-corner drift banner
+  together. `StewardItemCard.jsx` follows Section 5.10 literally:
+  evidence (measurements, the Tier 2 description + authority,
+  exceptions evaluated, an honestly-labelled clip placeholder since no
+  clip storage exists yet) renders before `TrustBars.jsx`'s five
+  separate bars, which render before the Tier 3 agent's both-sides
+  reasoning (if present), which renders before **the verdict badge,
+  last** — "showing the conclusion first anchors the steward and
+  destroys the independence that makes human review valuable," quoted
+  directly from the plan. `DriftIndicator.jsx` computes a per-corner
+  steward-override rate client-side from `GET /overrides` — a signal
+  that a corner's config or boundary geometry may be off, not a ruling
+  on any one finding. `ReviewControls.jsx` is the only path to
+  Confirm/Reject, and disappears once a steward has decided.
+
+  Verified for real, not just built: `npm run build` and `npm run lint`
+  (Oxlint) both pass clean, and the whole thing was smoke-tested end to
+  end against a live `uvicorn` instance in a headless browser — queue
+  load over REST, a finding submitted via `POST /events` while the page
+  was open appearing live over the WebSocket with no reload, and a full
+  Confirm click that correctly updated both the item's decided state and
+  the drift banner. (Caught one real bug doing this: `requirements.txt`
+  listed bare `uvicorn`, which has no WebSocket backend on its own —
+  `/ws/queue` 404'd with "No supported WebSocket library detected"
+  until `websockets` was added to `requirements.txt` directly.)
 
 - `src/eval/metrics.py` (Section 5.11) — `precision_recall` (recall is the
   metric that matters most here: "a missed violation is worse than a
@@ -195,8 +228,10 @@ agent, trust/calibration, the steward console) sits on top of:
   production.
 
 Run the tests: `pip install -r requirements.txt && python3 -m pytest`
-(185 tests + 1 skipped without an API key, including the five Section 5.6
+(186 tests + 1 skipped without an API key, including the five Section 5.6
 requires verbatim and the Section 5.1 round-trip acceptance criterion).
+`console/` has its own toolchain — see `console/README.md` for how to run
+it against a live API.
 
 ### Where Tier 2's determinism ends on purpose
 
@@ -226,12 +261,14 @@ present measurement. The only Tier 2-level abstention is missing data.
 - `src/agent/` is wired into `src/api/` now (above), but not into
   `app.py` — the Streamlit demo still evaluates findings directly,
   in-process, with no agent call.
-- `console/` (Tier 5) — a real frontend for `src/api/`'s queue (`app.py`'s
-  Streamlit UI is the only steward-facing surface right now, and it
-  doesn't talk to the API — it evaluates and reviews findings directly,
-  in-process). `src/render/overlay.py` is built (above) but not wired
-  into either `app.py` or `src/api/` yet — nothing calls it end-to-end
-  with real detection output.
+- `console/` is now built (above) and is the real frontend for
+  `src/api/`'s queue. `app.py`'s Streamlit UI remains a separate,
+  older surface that doesn't talk to the API — it evaluates and reviews
+  findings directly, in-process — and still needs reconciling with (or
+  retiring in favour of) `console/`. `src/render/overlay.py` is built
+  (above) but not wired into either `app.py` or `src/api/` yet — nothing
+  calls it end-to-end with real detection output, so neither
+  steward-facing surface can show an evidence clip yet.
 - `src/eval/scrape_fia.py` — parsing real FIA stewards' decision documents
   into ground truth. `src/eval/metrics.py` (above) is built and tested,
   just with no real labelled data to run it against yet.

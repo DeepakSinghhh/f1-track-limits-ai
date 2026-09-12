@@ -7,5 +7,6 @@ pyyaml
 pytest
 fastapi
 uvicorn
+websockets
 httpx
 groq
