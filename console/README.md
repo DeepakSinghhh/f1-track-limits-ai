@@ -14,8 +14,9 @@ renders, in this fixed order:
 1. Measurements (margin, uncertainty, corner-monitored flag)
 2. The Tier 2 finding description and its cited authority
 3. Exceptions the rule engine evaluated (forced off, avoidance, etc.)
-4. Evidence clip placeholder (no clip storage exists yet — honestly
-   labelled rather than faked)
+4. Evidence clip field (shows `evidence_clip_path` when the submitting
+   pipeline rendered one, honestly labelled "not attached" when it
+   didn't — still shown as text either way, not a video player)
 5. The five-component trust decomposition (`TrustBars`) — never a single
    opaque score
 6. The Tier 3 agent's both-sides reasoning, if the agent ran and is
@@ -61,6 +62,12 @@ By default the console points at `http://localhost:8000`. Override with
 `VITE_API_BASE_URL` at build time, or type a different URL into the "API
 base URL" field in the toolbar at runtime.
 
+Nothing appears in the queue on its own — `console/` only reviews
+findings, it can't ingest a video. Run `streamlit run app.py` (repo
+root) against the same API to actually submit candidate events from a
+clip; `app.py`'s own sidebar has a matching "API base URL" field so both
+point at the same backend.
+
 `npm run build` produces a static `dist/` bundle; `npm run lint` runs
 Oxlint. Both are verified clean as of this commit — the app was also
 smoke-tested end to end against a live `uvicorn` instance (queue load,
@@ -72,9 +79,11 @@ confirm flow that correctly updates the drift banner).
 - No auth. The API has none either — this is a local/demo console, not
   a deployed one. CORS on the API is wide open (`allow_origins=["*"]`)
   for the same reason.
-- No evidence clip playback — `evidence_clip_path` is always `null`
-  until the pipeline that produces clips exists, and the card says so
-  rather than rendering a broken player.
+- No evidence clip playback — `app.py` can populate `evidence_clip_path`
+  now, but it's a local filesystem path with no static-file route
+  serving it over HTTP, so the card still shows it as plain text rather
+  than rendering a player that would likely be broken for whoever's
+  actually viewing `console/`.
 - The drift indicator is computed from whatever `/overrides` currently
   holds in memory for this API process; it is not persisted across
   server restarts (neither is the queue itself — `app.state.items` is

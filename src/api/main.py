@@ -69,6 +69,12 @@ class EvidenceContext:
 class EvaluateRequest:
     event: ExcursionEvent
     evidence: EvidenceContext = field(default_factory=EvidenceContext)
+    # A local filesystem path a submitting pipeline (app.py) already
+    # rendered a clip to (src/render/incident.py + render_incident_clip).
+    # Passed through as-is -- this API has no clip storage of its own and
+    # does not validate the path resolves anywhere, since it may not
+    # share a filesystem with whoever renders console/'s response.
+    evidence_clip_path: str | None = None
 
 
 @dataclass
@@ -185,7 +191,7 @@ def create_app(
             trust=trust,
             verdict=final_verdict,
             agent_reasoning=agent_reasoning_text,
-            evidence_clip_path=None,
+            evidence_clip_path=payload.evidence_clip_path,
             precedents=[],
             priority=trust.scalar,
         )

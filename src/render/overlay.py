@@ -199,10 +199,18 @@ def render_incident_clip(
         writer.write(out_frame)
     writer.release()
 
-    return _try_reencode_h264(raw_path, output_path)
+    return try_reencode_h264(raw_path, output_path)
 
 
-def _try_reencode_h264(raw_path: str, output_path: str) -> str:
+def try_reencode_h264(raw_path: str, output_path: str) -> str:
+    """Best-effort ffmpeg re-encode to a widely-compatible codec. Returns
+    output_path on success, or raw_path unchanged if ffmpeg is missing or
+    the re-encode fails -- the raw mp4v file is still a complete, readable
+    clip either way, so a missing binary degrades the codec, not the
+    caller's pipeline. Public so any caller writing raw mp4v output (not
+    just render_incident_clip) can reuse the same fallback instead of an
+    unguarded subprocess.run of its own.
+    """
     try:
         subprocess.run(
             ["ffmpeg", "-y", "-i", raw_path, "-vcodec", "libx264", output_path],

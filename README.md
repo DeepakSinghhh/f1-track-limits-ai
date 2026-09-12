@@ -120,44 +120,66 @@ agent, trust/calibration, the steward console) sits on top of:
   demo API with no auth of its own) specifically so `console/` — running
   on a different dev port — can reach it.
 
-- `src/review_queue.py` (Tiers 3+4, shared) — `app.py` now runs the same
-  trust + agent computation as `src/api/main.py`, factored out here since
-  `app.py` annotates a whole clip's findings in one batch rather than one
-  HTTP request at a time. `annotate_findings` takes the
-  `(ExcursionEvent, Finding, Verdict)` triples `TrackLimitDetector` now
-  returns (previously just `(Finding, Verdict)` — extending that tuple
-  was the one breaking API change here, since `measurement_margin` and
-  `rule_determinacy` both need the event, not just the finding, and
-  `app.py` had never computed trust at all before this) and returns a
-  `TrustVector` plus a Tier-4 `display_verdict` per finding, exactly the
-  way `decide_verdict` downgrades Tier 2's own verdict to
-  `INSUFFICIENT_EVIDENCE` on low trust and never upgrades one into a
-  violation Tier 2 didn't find. The Tier 3 agent runs on whatever lands
-  below the same 0.5 threshold, using the same `format_agent_reasoning`
-  template (now a single shared function in `src/agent/reason.py` instead
-  of duplicated in `src/api/main.py`). `app.py`'s sidebar constructs a
-  `groq.Groq` client from `GROQ_API_KEY` if the environment has one and
-  says plainly whether the agent is enabled; with no key, trust bars and
-  the Tier 4 abstention decision still run, only the agent step is
-  skipped, matching the API's own optional wiring. Every finding card
-  keeps the evidence-before-verdict order from Section 5.10 that
-  `console/` established: description/authority/exceptions, then the
-  five trust bars, then the agent's both-sides reasoning if present, then
-  the verdict last — and when Tier 4 downgrades Tier 2's own verdict, the
-  card says so explicitly rather than just quietly showing the milder
-  one. 6 new tests (`tests/test_review_queue.py`) cover high-trust
-  pass-through, low-trust downgrade + agent trigger, no-agent-configured,
-  agent-failure isolation, and that precedent consistency accumulates
-  per corner in submission order — all against synthetic findings, no
-  Streamlit/YOLO/network needed. Verified for real, not just unit-tested:
-  `streamlit run app.py` was started and loaded in a headless browser —
-  boots clean, no exception banner, and the new "Tier 3 agent:
-  disabled/enabled" sidebar caption renders correctly. Running the
-  detection pipeline itself (the part that needs `ultralytics` + YOLO
-  weights) still can't be exercised in this sandbox — same limitation as
-  every other CV-pipeline change in this project — so the trust/agent
-  wiring inside that code path is verified via `src/review_queue.py`'s
-  own tests, not an end-to-end pipeline run.
+- **`app.py` is retired as a steward review surface, in favour of
+  `console/`.** It briefly grew its own local trust computation
+  (`src/review_queue.py`, a batch version of what `src/api/main.py` runs
+  per request) and a duplicate confirm/reject UI with its own override
+  log — a second, single-process copy of exactly what `console/` +
+  `src/api/` already do, and do better (a live, multi-viewer queue,
+  Section 5.10's evidence-before-verdict ordering, real-time WebSocket
+  updates). That duplication is gone now: `src/review_queue.py` and its
+  tests were deleted outright (dead code the moment nothing called it,
+  not kept around "just in case"), and `app.py` no longer imports
+  `src/agent/`, `src/trust/`, `src/rules/escalation.py`, or
+  `src/audit/log.py` at all.
+
+  What `app.py` is *for* now: it's the only thing in this project that
+  can actually run a video through YOLO, per-wheel calibration, and
+  Tier 1 localisation — `console/` has no way to ingest a video, and
+  `src/api/` has no way to run a calibration form or touch a frame. So
+  `app.py` stayed as a thin **pipeline runner**: same Ingestion and
+  Calibration sidebar sections as before, unchanged, but "Run Detection
+  Pipeline" now ends by `POST`ing every candidate `ExcursionEvent` (as
+  plain JSON, via `httpx`) to a running `src/api/` instance instead of
+  evaluating and reviewing them itself — Tier 2, Tier 4, and Tier 3 (on
+  the ambiguous slice) all now run **server-side**, on receipt, exactly
+  once, not duplicated client-side. A new "Steward Console API" sidebar
+  field sets the target URL (defaulting to `http://localhost:8000`, or
+  `APEX_API_BASE_URL` if set — same pattern as `console/`'s own API-base
+  setting); before running the (possibly slow) YOLO pass at all,
+  `app.py` first pings `GET /health` and refuses to proceed with a clear
+  error if the API isn't reachable there, rather than running the whole
+  pipeline just to fail on submission. The results view is now a
+  submission summary table (event id, corner, wheels off, the verdict
+  and trust scalar the API returned, submit status) plus the boundary-
+  overlay replay video — not a review UI. Reviewing, confirming, and
+  rejecting what gets submitted here now happens exclusively in
+  `console/`.
+
+  Evidence clips (Section 5.9, below) are unaffected by any of this —
+  `app.py` still renders them locally for a calibrated run and now
+  passes the path along in the submission (`EvaluateRequest` grew an
+  optional `evidence_clip_path: str | None` field that `src/api/`
+  passes straight through onto `StewardItem`, tested in
+  `tests/test_api.py`); `console/`'s card already renders whatever
+  string is there, so a submitted clip's path shows up in `console/`
+  instead of the always-`None` it was before. It still isn't a video
+  player in `console/` — that path is meaningful only when `console/`,
+  `src/api/`, and whoever ran `app.py` share a filesystem, since there's
+  no static-file route serving clips over HTTP yet; a stated, not
+  hidden, next gap.
+
+  Verified for real: with a live `uvicorn src.api.main:app` running,
+  the exact JSON shape `app.py` now constructs (`event`, `evidence`,
+  `evidence_clip_path`) was POSTed directly at `/events` and confirmed
+  to come back with a real Tier 2/4 verdict, a computed trust scalar,
+  and the clip path passed straight through. `streamlit run app.py`
+  itself boots clean in a headless browser, both against a reachable
+  API (green "API reachable" sidebar message) and against none running
+  at all (a clear, direct error rather than a stack trace). Running the
+  actual YOLO pass end-to-end still needs `ultralytics` + weights,
+  unavailable in this sandbox — same standing limitation as every other
+  CV-pipeline change in this project.
 
 - `console/` (Section 5.10, Tier 5 frontend) — a real React + Vite (plain
   JS) steward console for `src/api/main.py`, not a mock. `src/api.js` is
@@ -166,8 +188,11 @@ agent, trust/calibration, the steward console) sits on top of:
   steward id/session type toolbar, and a per-corner drift banner
   together. `StewardItemCard.jsx` follows Section 5.10 literally:
   evidence (measurements, the Tier 2 description + authority,
-  exceptions evaluated, an honestly-labelled clip placeholder since no
-  clip storage exists yet) renders before `TrustBars.jsx`'s five
+  exceptions evaluated, a clip field that shows `evidence_clip_path`
+  when `app.py` submitted one, and an honest "not attached" message when
+  it didn't — still text either way, not a `<video>` player, since
+  there's no static-file route serving clips over HTTP yet) renders
+  before `TrustBars.jsx`'s five
   separate bars, which render before the Tier 3 agent's both-sides
   reasoning (if present), which renders before **the verdict badge,
   last** — "showing the conclusion first anchors the steward and
@@ -266,7 +291,7 @@ agent, trust/calibration, the steward console) sits on top of:
   production.
 
 Run the tests: `pip install -r requirements.txt && python3 -m pytest`
-(204 tests + 1 skipped without an API key, including the five Section 5.6
+(200 tests + 1 skipped without an API key, including the five Section 5.6
 requires verbatim and the Section 5.1 round-trip acceptance criterion).
 `console/` has its own toolchain — see `console/README.md` for how to run
 it against a live API.
@@ -293,17 +318,16 @@ present measurement. The only Tier 2-level abstention is missing data.
   numeric calibration form rather than an interactive click tool, and
   `model_confidence` in `trust/` is still a caller-supplied score —
   nothing produces one from real data yet.
-- `src/agent/` is now wired into both steward-facing surfaces — `src/api/`
-  directly, `app.py` via the shared `src/review_queue.py` (above).
-- `console/` is now built (above) and is the real frontend for
-  `src/api/`'s queue. `app.py`'s Streamlit UI remains a separate,
-  older surface that doesn't talk to the API — it evaluates and reviews
-  findings directly, in-process — and still needs reconciling with (or
-  retiring in favour of) `console/`. `src/render/overlay.py` is now
-  wired into `app.py` (below, `src/render/incident.py`) for calibrated
-  runs, but still not into `src/api/` — `console/`'s clip placeholder
-  stays honest ("not attached") until a finding submitted over HTTP
-  carries one.
+- `src/agent/` runs server-side, in `src/api/` — the only place a
+  finding is evaluated now (below, "`app.py` is retired as a steward
+  review surface").
+- `console/` (above) is the only steward review surface now — `app.py`
+  no longer duplicates it (below). `src/render/overlay.py` is wired into
+  `app.py`'s pipeline run (`src/render/incident.py`, below) for
+  calibrated clips, and the resulting path now flows through
+  `src/api/` to `console/` too (`EvaluateRequest.evidence_clip_path`) —
+  but `console/`'s card still only shows that path as text, not a
+  `<video>` player, since nothing serves clip files over HTTP yet.
 - `src/eval/scrape_fia.py` — parsing real FIA stewards' decision documents
   into ground truth. `src/eval/metrics.py` (above) is built and tested,
   just with no real labelled data to run it against yet.
@@ -356,10 +380,11 @@ rewired onto the real core above rather than patched in place:
   `tests/test_detector_calibrated.py` proves both outcomes (a genuine
   4-wheel violation and a genuine 2-wheels-legal no-violation) through
   the real pipeline, not a mock.
-- `app.py` no longer shows any fabricated number in either mode. Strikes
-  move only when a steward clicks **Confirm Violation**, via
-  `EscalationEngine.increment_strike` and `OverrideLog`, exactly as
-  everywhere else in this project.
+- `app.py` no longer shows any fabricated number in either mode, and (as
+  of the retirement described below) no longer applies strikes itself at
+  all — every candidate event is submitted to `src/api/`, and
+  `EscalationEngine.increment_strike` only ever runs there, reached
+  exclusively through a steward clicking Confirm in `console/`.
 
 Writing `build_straight_segment_track`'s tests caught a real geometry bug:
 the fabricated closed loop's "return path" (TrackFrame needs one) was
