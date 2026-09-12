@@ -101,8 +101,18 @@ agent, trust/calibration, the steward console) sits on top of:
   calibration set `src/eval/` doesn't produce yet — the API doesn't
   fabricate an ambiguity signal it has no data to support.
 
+- `src/eval/metrics.py` (Section 5.11) — `precision_recall` (recall is the
+  metric that matters most here: "a missed violation is worse than a
+  queued false positive"), `steward_agreement_by_trust_band`,
+  `risk_coverage_curve`, `human_review_reduction`, `mean_flag_latency`
+  ("no real-time claims without a measured latency number", Section 8).
+  Every function takes plain lists rather than a specific labelled-data
+  type, so all of it is usable — and tested — without
+  `src/eval/scrape_fia.py` (real FIA stewards' decisions) existing yet.
+  Expected calibration error already lives in `trust/calibrate.py`.
+
 Run the tests: `pip install -r requirements.txt && python3 -m pytest`
-(99 tests, including the five Section 5.6 requires verbatim and the
+(114 tests, including the five Section 5.6 requires verbatim and the
 Section 5.1 round-trip acceptance criterion).
 
 ### Where Tier 2's determinism ends on purpose
@@ -130,7 +140,9 @@ present measurement. The only Tier 2-level abstention is missing data.
   and a real frontend for `src/api/`'s queue (`app.py`'s Streamlit UI is
   the only steward-facing surface right now, and it doesn't talk to the
   API — it evaluates and reviews findings directly, in-process).
-- `src/eval/` — FIA decision scraping and metrics.
+- `src/eval/scrape_fia.py` — parsing real FIA stewards' decision documents
+  into ground truth. `src/eval/metrics.py` (above) is built and tested,
+  just with no real labelled data to run it against yet.
 
 ## The CV demo pipeline (`app.py`, `src/detector.py`, `src/geofence.py`)
 
