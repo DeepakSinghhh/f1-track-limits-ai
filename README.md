@@ -72,8 +72,21 @@ agent, trust/calibration, the steward console) sits on top of:
   uncertain than the calibration set ever saw, empty-falling-back-to-both)
   set is genuine ambiguity.
 
+- `src/events/localise.py` (Section 5.4, Tier 1) — `localise_events`:
+  hysteresis (+2cm enter / -2cm exit) plus a minimum-duration gate over a
+  `CarState` stream, no trained model. The trigger signal is the CAR's own
+  margin (all telemetry has, per Section 5.2 — wheel_d is None there),
+  while `wheels_off_peak` is recorded separately only where wheel data
+  exists; this also matches Section 2's funnel, where most candidates
+  turn out to be legal (1-3 wheels), not four-wheel violations. Proposes
+  FORCED_OFF / AVOIDANCE / EXCURSION_NO_ADVANTAGE from `RelationalContext`
+  (the counterfactual-gain split against EXCURSION_WITH_GAIN is Section
+  5.5's estimator, not built yet). `tests/test_pipeline_localise_to_rules.py`
+  proves its `ExcursionEvent` output feeds `rules/engine.py` with no
+  adapter needed — the payoff of fixing data contracts before any tier.
+
 Run the tests: `pip install -r requirements.txt && python3 -m pytest`
-(62 tests, including the five Section 5.6 requires verbatim and the
+(74 tests, including the five Section 5.6 requires verbatim and the
 Section 5.1 round-trip acceptance criterion).
 
 ### Where Tier 2's determinism ends on purpose
@@ -89,13 +102,12 @@ present measurement. The only Tier 2-level abstention is missing data.
 
 ## Not yet built
 
-- `src/telemetry/`, `src/vision/`, `src/events/` (Tiers 0-1) — perception
-  and event localisation. `src/track/` (the "spine" these depend on) is
-  built, but nothing yet feeds it real session data — `build_track` is
-  exercised with a synthetic car-position envelope in tests, and
-  `ExcursionEvent`s are hand-built via `tests/factories.py` for `rules/`
-  and `trust/`. `model_confidence` in `trust/` is likewise a caller-
-  supplied score in tests — nothing produces one from real data yet.
+- `src/telemetry/`, `src/vision/` (Tier 0) — perception. Nothing yet
+  produces a real `CarState` stream, a real `TrackFrame`/`Boundary`, or a
+  real `corner_of`/`lap_of` mapping — `events/localise.py` and
+  `track/build.py` are exercised with synthetic data in tests.
+  `model_confidence` in `trust/` is likewise a caller-supplied score in
+  tests — nothing produces one from real data yet.
 - `src/agent/` (Tier 3) — the both-sides LLM reasoning pass over the
   ambiguous slice.
 - `src/render/`, `src/api/`, `console/` (Tier 5) — boundary-overlay clip
