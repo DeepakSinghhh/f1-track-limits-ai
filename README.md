@@ -159,15 +159,42 @@ agent, trust/calibration, the steward console) sits on top of:
   Evidence clips (Section 5.9, below) are unaffected by any of this —
   `app.py` still renders them locally for a calibrated run and now
   passes the path along in the submission (`EvaluateRequest` grew an
-  optional `evidence_clip_path: str | None` field that `src/api/`
-  passes straight through onto `StewardItem`, tested in
-  `tests/test_api.py`); `console/`'s card already renders whatever
-  string is there, so a submitted clip's path shows up in `console/`
-  instead of the always-`None` it was before. It still isn't a video
-  player in `console/` — that path is meaningful only when `console/`,
-  `src/api/`, and whoever ran `app.py` share a filesystem, since there's
-  no static-file route serving clips over HTTP yet; a stated, not
-  hidden, next gap.
+  optional `evidence_clip_path: str | None` field). `src/api/` now
+  **serves that clip back out** rather than just passing the raw path
+  through: it mounts `GET /clips/<filename>` via FastAPI's `StaticFiles`
+  (Range-request support included, needed for a `<video>` element to
+  seek) over the same directory `app.py` wrote to, and
+  `_resolve_clip_url` rewrites whatever filesystem path was submitted
+  into that servable URL — `os.path.basename` strips any directory
+  component first, so a path trying to escape `clips_dir` just resolves
+  to a filename that isn't there and safely becomes `None`, not a
+  traversal risk. `console/`'s card now renders a real `<video controls>`
+  element pointed at `{apiBaseUrl}{evidence_clip_path}` when one comes
+  back, honest placeholder text otherwise. 4 new API tests
+  (`tests/test_api.py`) cover a real file being served back with the
+  right bytes, a submitted path with no matching file becoming `None`,
+  and a directory-traversal attempt being neutralized.
+
+  Verified for real, and this is where a genuine, sandbox-wide limitation
+  surfaced: `GET /clips/<file>` was confirmed serving a real mp4 with
+  `content-type: video/mp4` and `accept-ranges: bytes`, and `console/`'s
+  new `<video>` element picked up the correct URL — but the clip itself
+  (written by `cv2.VideoWriter` with the `mp4v` fourcc, this project's
+  raw output before any re-encode) came back with
+  `MediaError.code === 4` (`MEDIA_ERR_SRC_NOT_SUPPORTED`) in a real
+  Chromium tab. Checked why, not just noted: this sandbox has no
+  `ffmpeg` binary *and* no working H.264 encoder anywhere inside OpenCV's
+  own bundled FFmpeg either (`avc1`/`H264`/`X264` fourccs all fail to
+  open a `VideoWriter` here — confirmed directly, not assumed). Raw
+  `mp4v` is a completely valid, independently readable file (OpenCV
+  reads it back fine, as documented below) — it just isn't a codec
+  Chrome's `<video>` element decodes. The serving route, URL rewriting,
+  and security check are all confirmed correct; only final in-browser
+  playback needs an H.264-capable environment (real `ffmpeg`, or a
+  system OpenCV build with an H.264 encoder) that this sandbox doesn't
+  have — the same standing constraint as everything else CV-related in
+  this project, now with its exact failure mode pinned down instead of
+  assumed benign.
 
   Verified for real: with a live `uvicorn src.api.main:app` running,
   the exact JSON shape `app.py` now constructs (`event`, `evidence`,
@@ -188,11 +215,9 @@ agent, trust/calibration, the steward console) sits on top of:
   steward id/session type toolbar, and a per-corner drift banner
   together. `StewardItemCard.jsx` follows Section 5.10 literally:
   evidence (measurements, the Tier 2 description + authority,
-  exceptions evaluated, a clip field that shows `evidence_clip_path`
-  when `app.py` submitted one, and an honest "not attached" message when
-  it didn't — still text either way, not a `<video>` player, since
-  there's no static-file route serving clips over HTTP yet) renders
-  before `TrustBars.jsx`'s five
+  exceptions evaluated, a real `<video controls>` element when
+  `evidence_clip_path` came back from the API, and an honest "not
+  attached" message when it didn't) renders before `TrustBars.jsx`'s five
   separate bars, which render before the Tier 3 agent's both-sides
   reasoning (if present), which renders before **the verdict badge,
   last** — "showing the conclusion first anchors the steward and
@@ -291,7 +316,7 @@ agent, trust/calibration, the steward console) sits on top of:
   production.
 
 Run the tests: `pip install -r requirements.txt && python3 -m pytest`
-(200 tests + 1 skipped without an API key, including the five Section 5.6
+(202 tests + 1 skipped without an API key, including the five Section 5.6
 requires verbatim and the Section 5.1 round-trip acceptance criterion).
 `console/` has its own toolchain — see `console/README.md` for how to run
 it against a live API.
@@ -322,12 +347,12 @@ present measurement. The only Tier 2-level abstention is missing data.
   finding is evaluated now (below, "`app.py` is retired as a steward
   review surface").
 - `console/` (above) is the only steward review surface now — `app.py`
-  no longer duplicates it (below). `src/render/overlay.py` is wired into
-  `app.py`'s pipeline run (`src/render/incident.py`, below) for
-  calibrated clips, and the resulting path now flows through
-  `src/api/` to `console/` too (`EvaluateRequest.evidence_clip_path`) —
-  but `console/`'s card still only shows that path as text, not a
-  `<video>` player, since nothing serves clip files over HTTP yet.
+  no longer duplicates it (below). Evidence clips are now served
+  end-to-end (`src/render/overlay.py` → `app.py` renders one →
+  `src/api/`'s `GET /clips/<file>` serves it → `console/` plays it in a
+  real `<video>` element) — what's still missing is an H.264-capable
+  environment to actually decode one in a browser; see the note below
+  under `src/api/` for the confirmed failure mode.
 - `src/eval/scrape_fia.py` — parsing real FIA stewards' decision documents
   into ground truth. `src/eval/metrics.py` (above) is built and tested,
   just with no real labelled data to run it against yet.
