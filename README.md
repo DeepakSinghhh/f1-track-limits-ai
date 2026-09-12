@@ -53,8 +53,27 @@ agent, trust/calibration, the steward console) sits on top of:
   ("the field collectively paints the track surface"), smoothed
   circularly. Tested against a synthetic envelope with a known width.
 
+- `src/trust/components.py` (Section 5.7, Tier 4) — the five independently
+  displayed trust components (`evidence_quality`, `measurement_margin`,
+  `model_confidence` input, `rule_determinacy`, `precedent_consistency`),
+  `combine()` into a scalar, and `decide_verdict()`: the abstention policy
+  ("if scalar < threshold or the conformal set has >1 element, verdict is
+  INSUFFICIENT_EVIDENCE"). This is where the plan's fuller abstain
+  capability actually lives — Tier 4 can downgrade a confident Tier 2
+  finding to abstention on low trust, but never invents a violation
+  Tier 2 didn't find.
+- `src/trust/calibrate.py` — isotonic regression (pool-adjacent-violators,
+  implemented directly rather than adding scikit-learn for one function)
+  turning a raw confidence into a calibrated probability, plus expected
+  calibration error (ECE) so the calibration is itself measured.
+- `src/trust/conformal.py` — split conformal prediction (~40 lines, per
+  the plan) giving a distribution-free coverage guarantee: a singleton
+  prediction set is confident, a two-element (or, when even more
+  uncertain than the calibration set ever saw, empty-falling-back-to-both)
+  set is genuine ambiguity.
+
 Run the tests: `pip install -r requirements.txt && python3 -m pytest`
-(41 tests, including the five Section 5.6 requires verbatim and the
+(62 tests, including the five Section 5.6 requires verbatim and the
 Section 5.1 round-trip acceptance criterion).
 
 ### Where Tier 2's determinism ends on purpose
@@ -74,10 +93,9 @@ present measurement. The only Tier 2-level abstention is missing data.
   and event localisation. `src/track/` (the "spine" these depend on) is
   built, but nothing yet feeds it real session data — `build_track` is
   exercised with a synthetic car-position envelope in tests, and
-  `ExcursionEvent`s are hand-built via `tests/factories.py` for `rules/`.
-- `src/trust/` (Tier 4) — the five-component trust vector, isotonic
-  calibration, and split conformal prediction that turns a `Finding` into
-  a ranked, confidence-decomposed `StewardItem`.
+  `ExcursionEvent`s are hand-built via `tests/factories.py` for `rules/`
+  and `trust/`. `model_confidence` in `trust/` is likewise a caller-
+  supplied score in tests — nothing produces one from real data yet.
 - `src/agent/` (Tier 3) — the both-sides LLM reasoning pass over the
   ambiguous slice.
 - `src/render/`, `src/api/`, `console/` (Tier 5) — boundary-overlay clip
