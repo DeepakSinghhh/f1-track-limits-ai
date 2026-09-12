@@ -23,7 +23,12 @@ _REQUIRED_ESCALATION = (
 )
 _REQUIRED_CITATIONS = ("core_rule",)
 
-DEFAULT_MIN_CONFIDENCE_SIGMA = 2.0
+#: Section 5.4: events shorter than this are rejected as measurement
+#: artefacts (kerb strikes, single-frame noise), not evaluated as
+#: track-limits events. A detection-methodology parameter, not a
+#: regulation, so it lives here rather than in src/rules/ — but it is not
+#: circuit-specific either, hence the module-level default.
+DEFAULT_MIN_EVENT_DURATION_S = 0.150
 
 
 @dataclass(frozen=True)
@@ -41,7 +46,7 @@ class EventConfig:
     year: int
     monitored_corners: frozenset[int]
     white_line_width_m: float
-    min_confidence_sigma: float
+    min_event_duration_s: float
     escalation: EscalationConfig
     citations: dict[str, str]
     source_path: str
@@ -80,7 +85,7 @@ def load_event_config(path: str | Path) -> EventConfig:
         year=int(raw["year"]),
         monitored_corners=frozenset(int(c) for c in raw["monitored_corners"]),
         white_line_width_m=float(raw.get("white_line_width_m", 0.10)),
-        min_confidence_sigma=float(measurement_raw.get("min_confidence_sigma", DEFAULT_MIN_CONFIDENCE_SIGMA)),
+        min_event_duration_s=float(measurement_raw.get("min_event_duration_s", DEFAULT_MIN_EVENT_DURATION_S)),
         escalation=EscalationConfig(**{k: int(escalation_raw[k]) for k in _REQUIRED_ESCALATION}),
         citations={k: str(v) for k, v in citations_raw.items()},
         source_path=str(path),

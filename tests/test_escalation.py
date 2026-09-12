@@ -30,21 +30,21 @@ def make_violation_finding(config, corner=1):
 def test_strikes_do_not_move_without_confirmation(config, override_log):
     escalation = EscalationEngine(config, override_log)
     make_violation_finding(config)
-    # a Finding alone, with no confirm_violation call, must not move strikes
+    # a Finding alone, with no increment_strike call, must not move strikes
     assert escalation.strikes_for(44) == 0
 
 
-def test_confirm_violation_requires_a_configured_log(config):
+def test_increment_strike_requires_a_configured_log(config):
     escalation = EscalationEngine(config, override_log=None)
     finding = make_violation_finding(config)
     with pytest.raises(RuntimeError):
-        escalation.confirm_violation(finding, SessionType.RACE, steward_id="steward-1")
+        escalation.increment_strike(finding, SessionType.RACE, steward_id="steward-1")
 
 
 def test_practice_session_deletes_lap_time_on_first_strike(config, override_log):
     escalation = EscalationEngine(config, override_log)
     finding = make_violation_finding(config)
-    result = escalation.confirm_violation(finding, SessionType.PRACTICE, steward_id="steward-1")
+    result = escalation.increment_strike(finding, SessionType.PRACTICE, steward_id="steward-1")
     assert result.lap_time_deleted is True
     assert result.penalty_seconds == 0
     assert result.strikes == 1
@@ -55,7 +55,7 @@ def test_race_escalation_follows_event_notes_thresholds(config, override_log):
     results = []
     for _ in range(5):
         finding = make_violation_finding(config)
-        results.append(escalation.confirm_violation(finding, SessionType.RACE, steward_id="steward-1"))
+        results.append(escalation.increment_strike(finding, SessionType.RACE, steward_id="steward-1"))
 
     assert [r.strikes for r in results] == [1, 2, 3, 4, 5]
     assert results[2].black_and_white_flag is True   # 3rd strike
@@ -75,7 +75,7 @@ def test_reject_finding_never_adds_a_strike(config, override_log):
 def test_every_confirmation_and_rejection_is_logged(config, override_log):
     escalation = EscalationEngine(config, override_log)
     v = make_violation_finding(config)
-    escalation.confirm_violation(v, SessionType.RACE, steward_id="steward-1", rationale="clear overshoot")
+    escalation.increment_strike(v, SessionType.RACE, steward_id="steward-1", rationale="clear overshoot")
     r = make_violation_finding(config)
     escalation.reject_finding(r, steward_id="steward-2", rationale="replay showed 3 wheels off")
 

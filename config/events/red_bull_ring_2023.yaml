@@ -14,14 +14,13 @@ monitored_corners: [1, 3, 4, 6, 9, 10]
 # built consistently with what stewards see on the broadcast overlay.
 white_line_width_m: 0.10
 
-# Measurement-confidence threshold for the Tier 2 core test. A peak margin
-# less than this many measurement-sigma from zero cannot be called either
-# way and is reported as INSUFFICIENT_EVIDENCE rather than guessed at.
-# This is a deterministic statistical test (z-score), not an ML confidence
-# score — it does not decide the regulatory question, only whether the
-# input measurement is precise enough to apply Art. 33.3 at all.
+# Minimum sustained duration for an excursion to count as a track-limits
+# event rather than a measurement artefact (kerb strike, single-frame
+# noise) — Section 5.4/5.6. A detection-methodology parameter, not a
+# regulation or a circuit fact, kept here rather than hardcoded in
+# src/rules/ or src/events/.
 measurement:
-  min_confidence_sigma: 2.0
+  min_event_duration_s: 0.150
 
 # Per-event escalation configuration (Section 1.3). Thresholds are event
 # notes, not regulations, and vary weekend to weekend.

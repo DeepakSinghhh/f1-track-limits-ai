@@ -1,10 +1,11 @@
 """Session-dependent consequence engine (Apex Assist plan, Section 1.3).
 
 Strike counts and consequences here are all downstream of a human steward
-confirming a Finding — never of the Finding alone. Calling
-EscalationEngine.confirm_violation is itself the auditable steward action;
-the caller (Tier 5 console) must not invoke it except in direct response
-to a steward's decision, and every call is written to the OverrideLog.
+confirming a Finding — never of the Finding alone. Section 5.6: "It
+exposes increment_strike() as an explicit call made only by the console on
+steward confirmation — never by the pipeline." Calling
+EscalationEngine.increment_strike is itself the auditable steward action,
+and every call is written to the OverrideLog.
 """
 from __future__ import annotations
 
@@ -41,7 +42,7 @@ class ConsequenceResult:
 class EscalationEngine:
     """Per-event-weekend strike state, keyed by car number.
 
-    Strikes increment only through confirm_violation, which must only be
+    Strikes increment only through increment_strike, which must only be
     called after a human steward has reviewed and confirmed a Finding.
     There is no automatic path from Finding.violation == True to a strike.
     """
@@ -54,7 +55,7 @@ class EscalationEngine:
     def strikes_for(self, car_number: int) -> int:
         return self._strikes.get(car_number, 0)
 
-    def confirm_violation(
+    def increment_strike(
         self,
         finding: Finding,
         session_type: SessionType,

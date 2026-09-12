@@ -2,44 +2,77 @@
 
 AI steward-assist system for F1 track-limits adjudication. See the full
 implementation plan for the architecture, regulations, and non-negotiable
-constraints (Section 0) this project is built against.
+constraints (Section 0), module specs (Section 5), build order
+(Section 6), and anti-goals (Section 8) this project is built against.
 
 ## What's implemented
 
-The deterministic core described in Section 0/1/4 of the plan — the part
-of the system that is not allowed to be ML, and that everything else
-(vision, the reasoning agent, trust/calibration, the steward console) sits
-on top of:
+The deterministic core described in Sections 0, 1, 4 and 5.6 of the plan —
+the part of the system that is not allowed to be ML, and that everything
+else (Tiers 0/1/3/4/5: perception, event localisation, the reasoning
+agent, trust/calibration, the steward console) sits on top of:
 
 - `src/schemas.py` — Tier 0-5 data contracts (`CarState`, `ExcursionEvent`,
   `Finding`, `Verdict`, `TrustVector`, `StewardItem`).
 - `src/config.py` — loader for per-weekend Event Notes
   (`config/events/<circuit>_<year>.yaml`): monitored corners, escalation
-  thresholds, regulation citations. `src/rules/` never hardcodes a circuit
-  name or corner number; a test (`tests/test_config.py`) guards this.
-- `src/rules/predicates.py`, `src/rules/engine.py` (Tier 2) — the Art. 33.3
-  core test (all four wheels beyond the outer white line edge) and every
-  FIA Driving Standards Guidelines exception, evaluated and recorded
-  explicitly even when they don't apply. Produces a `Verdict` that can be
-  `INSUFFICIENT_EVIDENCE` — measurement uncertainty and missing wheel-
-  contact data abstain rather than guess.
-- `src/rules/escalation.py` (session-dependent consequences) — strikes
-  only ever move via `EscalationEngine.confirm_violation`, called only in
-  response to a steward decision. A `Finding.violation == True` alone
-  never changes state.
+  thresholds, minimum event duration gate, regulation citations.
+  `src/rules/` never hardcodes a circuit name or corner number; a test
+  (`tests/test_config.py`) greps for it.
+- `src/rules/predicates.py` — the five pure predicates from Section 5.6:
+  `left_the_track`, `corner_is_monitored`, `exception_forced_off`,
+  `exception_justifiable_reason`, `exception_part_of_penalised_incident`.
+  Each returns `(bool, citation_string)`. The one deliberate exception:
+  `left_the_track` returns `(None, reason)` when wheel-contact data is
+  missing — the sole case where Tier 2 cannot render a bool at all.
+- `src/rules/engine.py` (Tier 2) — composes the predicates into a
+  `Finding` + `Verdict`, recording every exception explicitly even when it
+  doesn't apply, and rejecting excursions under the configured minimum
+  duration as measurement artefacts rather than findings.
+- `src/rules/escalation.py` (session-dependent consequences, Section 1.3)
+  — strikes only ever move via `EscalationEngine.increment_strike`
+  ("an explicit call made only by the console on steward confirmation —
+  never by the pipeline", Section 5.6). A `Finding.violation == True`
+  alone never changes state. Practice/Qualifying delete the lap;
+  Race/Sprint follow the event's configured flag/penalty thresholds.
 - `src/audit/log.py` — append-only JSONL override log. Every
-  `confirm_violation` / `reject_finding` call is recorded with steward id,
+  `increment_strike` / `reject_finding` call is recorded with steward id,
   system verdict, human decision, and rationale.
 
-Run the tests: `pip install -r requirements.txt && python3 -m pytest`.
+Run the tests: `pip install -r requirements.txt && python3 -m pytest`
+(27 tests, including the five required by Section 5.6 verbatim).
+
+### Where Tier 2's determinism ends on purpose
+
+Section 5.7 puts confidence-based abstention (a marginal peak margin
+relative to its measurement sigma) in the Tier 4 trust layer's
+`measurement_margin` component and conformal prediction — not in the rule
+engine. `left_the_track` therefore always returns a definite `True`/`False`
+from the point-estimate measurement once duration and wheel-count are
+known; `margin_uncertainty_cm` is carried through on `Finding` for Tier 4
+to consume once it exists, but Tier 2 itself never second-guesses a
+present measurement. The only Tier 2-level abstention is missing data.
 
 ## Not yet built
 
-Tiers 0, 1, 3, 4, 5 (perception, event localisation, the LLM reasoning
-agent, trust/calibration, and the steward console) — see the plan for
-their data contracts and expected throughput funnel. `app.py` and
-`src/detector.py`/`src/geofence.py`/`src/kinematics.py`/
+- `src/track/` (Section 5.1) — Frenet frame, boundary model. Named first
+  in the build order ("nothing else works without it") but not required
+  to exercise `rules/` against synthetic `ExcursionEvent`s, which is what
+  this slice covers.
+- `src/telemetry/`, `src/vision/`, `src/events/` (Tiers 0-1) — perception
+  and event localisation; `ExcursionEvent`s are hand-built in tests for
+  now via `tests/factories.py`.
+- `src/trust/` (Tier 4) — the five-component trust vector, isotonic
+  calibration, and split conformal prediction that turns a `Finding` into
+  a ranked, confidence-decomposed `StewardItem`.
+- `src/agent/` (Tier 3) — the both-sides LLM reasoning pass over the
+  ambiguous slice.
+- `src/render/`, `src/api/`, `console/` (Tier 5) — boundary-overlay clip
+  export and the steward console.
+- `src/eval/` — FIA decision scraping and metrics.
+
+`app.py` and `src/detector.py`/`src/geofence.py`/`src/kinematics.py`/
 `src/calibration.py` are the pre-existing hackathon demo; they predate
 this core layer and are not yet wired to it — in particular the demo
 still auto-applies penalties and reports a fixed fake confidence number,
-which the plan's Section 0 explicitly rules out for the real system.
+both explicitly on the Section 8 anti-goals list for the real system.

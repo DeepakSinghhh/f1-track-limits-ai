@@ -14,7 +14,7 @@ def test_loads_the_sample_event_config():
     assert config.monitored_corners == frozenset({1, 3, 4, 6, 9, 10})
     assert config.escalation.first_penalty_seconds == 5
     assert config.citations["core_rule"] == "F1SR Art. 33.3"
-    assert config.min_confidence_sigma == 2.0
+    assert config.min_event_duration_s == 0.150
 
 
 def test_missing_required_field_raises(tmp_path):

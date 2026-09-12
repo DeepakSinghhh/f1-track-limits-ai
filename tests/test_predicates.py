@@ -1,75 +1,78 @@
+from src.config import load_event_config
 from src.rules.predicates import (
-    describe_exception,
-    evaluate_core_test,
-    evaluate_exceptions,
-    exception_applies,
+    corner_is_monitored,
+    exception_forced_off,
+    exception_justifiable_reason,
+    exception_part_of_penalised_incident,
+    left_the_track,
 )
-from src.schemas import EventType, Verdict
+from src.rules.session_state import SessionState
+from src.schemas import EventType
 from tests.factories import make_event
 
+CONFIG_PATH = "config/events/red_bull_ring_2023.yaml"
 
-def test_four_wheels_off_with_clear_margin_is_violation():
-    event = make_event(wheels_off_peak=4, max_margin_m=0.30, margin_sigma_m=0.02)
-    verdict, reason = evaluate_core_test(event, min_confidence_sigma=2.0)
-    assert verdict == Verdict.VIOLATION
+
+def config():
+    return load_event_config(CONFIG_PATH)
+
+
+def test_four_wheels_off_with_full_duration_is_a_violation():
+    event = make_event(wheels_off_peak=4, duration_s=0.62)
+    result, reason = left_the_track(event, config())
+    assert result is True
     assert "all four wheels" in reason
 
 
 def test_two_wheels_off_is_not_a_violation():
-    event = make_event(wheels_off_peak=2)
-    verdict, _ = evaluate_core_test(event, min_confidence_sigma=2.0)
-    assert verdict == Verdict.NO_VIOLATION
+    event = make_event(wheels_off_peak=2, duration_s=0.62)
+    result, _ = left_the_track(event, config())
+    assert result is False
 
 
 def test_three_wheels_off_is_not_a_violation():
-    event = make_event(wheels_off_peak=3)
-    verdict, _ = evaluate_core_test(event, min_confidence_sigma=2.0)
-    assert verdict == Verdict.NO_VIOLATION
+    event = make_event(wheels_off_peak=3, duration_s=0.62)
+    result, _ = left_the_track(event, config())
+    assert result is False
 
 
-def test_missing_wheel_data_is_insufficient_evidence():
+def test_short_excursion_is_a_measurement_artefact_not_a_violation():
+    # below the 150ms minimum duration gate configured for this event
+    event = make_event(wheels_off_peak=4, duration_s=0.10)
+    result, reason = left_the_track(event, config())
+    assert result is False
+    assert "artefact" in reason
+
+
+def test_missing_wheel_data_cannot_be_evaluated():
     event = make_event(wheels_off_peak=None)
-    verdict, reason = evaluate_core_test(event, min_confidence_sigma=2.0)
-    assert verdict == Verdict.INSUFFICIENT_EVIDENCE
+    result, reason = left_the_track(event, config())
+    assert result is None
     assert "unavailable" in reason
 
 
-def test_marginal_measurement_abstains_instead_of_guessing():
-    # margin is only 1x sigma from the boundary: not distinguishable at 2 sigma
-    event = make_event(wheels_off_peak=4, max_margin_m=0.02, margin_sigma_m=0.02)
-    verdict, reason = evaluate_core_test(event, min_confidence_sigma=2.0)
-    assert verdict == Verdict.INSUFFICIENT_EVIDENCE
-    assert "σ" in reason
+def test_corner_is_monitored():
+    assert corner_is_monitored(1, config())[0] is True   # in red_bull_ring_2023's list
+    assert corner_is_monitored(2, config())[0] is False  # not in the list
 
 
-def test_zero_margin_and_zero_sigma_is_not_a_violation_by_point_estimate():
-    event = make_event(wheels_off_peak=4, max_margin_m=0.0, margin_sigma_m=0.0)
-    verdict, _ = evaluate_core_test(event, min_confidence_sigma=2.0)
-    assert verdict == Verdict.INSUFFICIENT_EVIDENCE
+def test_forced_off_exception():
+    forced = make_event(proposed_type=EventType.FORCED_OFF)
+    clean = make_event(proposed_type=EventType.EXCURSION_NO_ADVANTAGE)
+    assert exception_forced_off(forced)[0] is True
+    assert exception_forced_off(clean)[0] is False
 
 
-def test_exceptions_are_all_reported_even_when_false():
-    event = make_event(proposed_type=EventType.EXCURSION_NO_ADVANTAGE)
-    result = evaluate_exceptions(event, corner_monitored=True, already_penalized=False)
-    assert result == {
-        "forced_off": False,
-        "avoidance": False,
-        "already_penalized": False,
-        "corner_not_monitored": False,
-    }
-    assert exception_applies(result) is False
+def test_justifiable_reason_exception():
+    avoidance = make_event(proposed_type=EventType.AVOIDANCE)
+    clean = make_event(proposed_type=EventType.EXCURSION_NO_ADVANTAGE)
+    assert exception_justifiable_reason(avoidance)[0] is True
+    assert exception_justifiable_reason(clean)[0] is False
 
 
-def test_forced_off_exception_applies():
-    event = make_event(proposed_type=EventType.FORCED_OFF)
-    result = evaluate_exceptions(event, corner_monitored=True, already_penalized=False)
-    assert result["forced_off"] is True
-    assert exception_applies(result) is True
-    assert "forced_off" in describe_exception(result)
-
-
-def test_unmonitored_corner_is_an_exception():
-    event = make_event()
-    result = evaluate_exceptions(event, corner_monitored=False, already_penalized=False)
-    assert result["corner_not_monitored"] is True
-    assert exception_applies(result) is True
+def test_already_penalised_exception_reads_session_state():
+    event = make_event(event_id="evt-42")
+    empty_state = SessionState()
+    penalized_state = SessionState(penalized_event_ids=frozenset({"evt-42"}))
+    assert exception_part_of_penalised_incident(event, empty_state)[0] is False
+    assert exception_part_of_penalised_incident(event, penalized_state)[0] is True
