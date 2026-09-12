@@ -1,12 +1,23 @@
+import json
+from dataclasses import asdict
+
 import pytest
 from fastapi.testclient import TestClient
 
 from src.api.main import create_app
 from tests.factories import make_event
-from dataclasses import asdict
-
+from tests.fake_groq import FakeClient, text_response
 
 CONFIG_PATH = "config/events/red_bull_ring_2023.yaml"
+
+VALID_AGENT_ANSWER = {
+    "finding": "Car 44 ran wide at turn 1.",
+    "case_for_violation": "Telemetry shows the car beyond the boundary for the full excursion.",
+    "case_against": "No car was alongside; looks like a mistake, not exploitation.",
+    "missing_evidence": "none",
+    "precedents_this_session": "none retrieved",
+    "recommendation": "violation",
+}
 
 
 @pytest.fixture
@@ -15,9 +26,22 @@ def client(tmp_path):
     return TestClient(app)
 
 
+def make_client_with_agent(tmp_path, responses):
+    fake_agent = FakeClient(responses)
+    app = create_app(
+        config_path=CONFIG_PATH, override_log_path=str(tmp_path / "overrides.jsonl"), agent_client=fake_agent
+    )
+    return TestClient(app), fake_agent
+
+
 def event_payload(**overrides):
     event = make_event(**overrides)
     return {"event": asdict(event)}
+
+
+def test_cors_allows_a_browser_frontend_on_a_different_origin(client):
+    resp = client.get("/health", headers={"Origin": "http://localhost:5173"})
+    assert resp.headers.get("access-control-allow-origin") == "*"
 
 
 def test_health(client):
@@ -146,3 +170,74 @@ def test_websocket_receives_snapshot_then_broadcast(client):
         broadcast = ws.receive_json()
         assert broadcast["type"] == "new_item"
         assert broadcast["item"]["finding"]["event_id"] == "after-connect"
+
+
+# --- Tier 3 (agent) wiring ---
+
+def test_health_reports_whether_agent_is_enabled(client, tmp_path):
+    assert client.get("/health").json()["agent_enabled"] is False
+
+    agent_client, _ = make_client_with_agent(tmp_path, [text_response(json.dumps(VALID_AGENT_ANSWER))])
+    assert agent_client.get("/health").json()["agent_enabled"] is True
+
+
+def test_low_trust_item_triggers_the_agent_and_populates_reasoning(tmp_path):
+    client, fake_agent = make_client_with_agent(
+        tmp_path,
+        [
+            text_response("no tools needed"),
+            text_response(json.dumps(VALID_AGENT_ANSWER)),
+        ],
+    )
+    payload = event_payload(
+        event_id="evt-low-trust", corner=1, wheels_off_peak=2, max_margin_m=0.01, margin_sigma_m=5.0
+    )
+    payload["evidence"] = {"model_confidence": 0.1}
+
+    item = client.post("/events", json=payload).json()
+
+    assert item["trust"]["scalar"] < 0.5
+    assert item["agent_reasoning"] is not None
+    assert "FINDING:" in item["agent_reasoning"]
+    assert "CASE FOR VIOLATION:" in item["agent_reasoning"]
+    assert "CASE AGAINST:" in item["agent_reasoning"]
+    assert "RECOMMENDATION: violation" in item["agent_reasoning"]
+    assert len(fake_agent.chat.completions.calls) == 2
+
+
+def test_high_trust_item_never_calls_the_agent(tmp_path):
+    client, fake_agent = make_client_with_agent(tmp_path, [text_response(json.dumps(VALID_AGENT_ANSWER))])
+    payload = event_payload(
+        event_id="evt-high-trust", corner=1, wheels_off_peak=4, max_margin_m=0.30, margin_sigma_m=0.02
+    )
+
+    item = client.post("/events", json=payload).json()
+
+    assert item["trust"]["scalar"] >= 0.5
+    assert item["agent_reasoning"] is None
+    assert len(fake_agent.chat.completions.calls) == 0
+
+
+def test_agent_failure_never_blocks_the_submission(tmp_path):
+    # no scripted responses at all -- the very first call raises inside
+    # the fake, standing in for a network error or a malformed response
+    client, fake_agent = make_client_with_agent(tmp_path, [])
+    payload = event_payload(
+        event_id="evt-agent-fails", corner=1, wheels_off_peak=2, max_margin_m=0.01, margin_sigma_m=5.0
+    )
+    payload["evidence"] = {"model_confidence": 0.1}
+
+    resp = client.post("/events", json=payload)
+
+    assert resp.status_code == 200
+    assert resp.json()["agent_reasoning"] is None
+
+
+def test_no_agent_client_configured_means_reasoning_always_none(client):
+    payload = event_payload(
+        event_id="evt-no-agent", corner=1, wheels_off_peak=2, max_margin_m=0.01, margin_sigma_m=5.0
+    )
+    payload["evidence"] = {"model_confidence": 0.1}
+
+    item = client.post("/events", json=payload).json()
+    assert item["agent_reasoning"] is None

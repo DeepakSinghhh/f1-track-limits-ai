@@ -93,13 +93,63 @@ agent, trust/calibration, the steward console) sits on top of:
   `/reject` are the only path to `EscalationEngine.increment_strike` /
   `reject_finding` — routed through a steward decision, exactly like
   `app.py`. `GET /overrides` exposes the audit log; `/ws/queue` pushes a
-  snapshot on connect and a broadcast on every new item. Two honest gaps
-  stated in its own module docstring: `agent_reasoning` and
-  `evidence_clip_path` are always `None` (Tiers 3 and 5's clip export
-  aren't built), and `conformal_set` is always a singleton matching the
-  rule engine's own verdict, because real conformal prediction needs a
-  calibration set `src/eval/` doesn't produce yet — the API doesn't
-  fabricate an ambiguity signal it has no data to support.
+  snapshot on connect and a broadcast on every new item. `conformal_set`
+  is still always a singleton matching the rule engine's own verdict —
+  real conformal prediction needs a calibration set `src/eval/` doesn't
+  produce yet, and the API doesn't fabricate an ambiguity signal it has
+  no data to support.
+  **`agent_reasoning` is now wired in** (Section 5.8, Tier 3): `create_app`
+  takes an optional `agent_client` (a Groq client; `None` by default, so
+  the API works exactly as before with no key or network configured).
+  When one is supplied, any submitted item whose trust scalar falls below
+  0.5 — the same threshold `decide_verdict` uses to abstain, so this is
+  literally "the ambiguous slice" — gets a real
+  `reason_about_finding` call, formatted into `agent_reasoning` using
+  Section 5.8's own template (`FINDING:` / `CASE FOR VIOLATION:` /
+  `CASE AGAINST:` / `MISSING EVIDENCE:` / `PRECEDENTS THIS SESSION:` /
+  `RECOMMENDATION:`) verbatim. The call runs via `asyncio.to_thread` so a
+  slow synchronous Groq call doesn't block the event loop, and any
+  failure (network, a malformed response) is caught and leaves
+  `agent_reasoning` at `None` rather than failing the submission — the
+  agent is advisory, so its absence is just the same as not configuring
+  one. Confirmed with 5 new API tests (agent triggered under low trust,
+  skipped under high trust, failure isolation, and the disabled-by-default
+  case) using the same scripted fake Groq client as `src/agent/`'s own
+  tests (now shared from `tests/fake_groq.py` instead of duplicated).
+  `app.py` does not call the agent yet — this wiring is API-only so far.
+  CORS is enabled (`allow_origins=["*"]`, permissive by design for a local
+  demo API with no auth of its own) specifically so `console/` — running
+  on a different dev port — can reach it.
+
+- `console/` (Section 5.10, Tier 5 frontend) — a real React + Vite (plain
+  JS) steward console for `src/api/main.py`, not a mock. `src/api.js` is
+  the only module that talks to the backend (REST + the `/ws/queue`
+  WebSocket for live updates); `App.jsx` wires queue state, the
+  steward id/session type toolbar, and a per-corner drift banner
+  together. `StewardItemCard.jsx` follows Section 5.10 literally:
+  evidence (measurements, the Tier 2 description + authority,
+  exceptions evaluated, an honestly-labelled clip placeholder since no
+  clip storage exists yet) renders before `TrustBars.jsx`'s five
+  separate bars, which render before the Tier 3 agent's both-sides
+  reasoning (if present), which renders before **the verdict badge,
+  last** — "showing the conclusion first anchors the steward and
+  destroys the independence that makes human review valuable," quoted
+  directly from the plan. `DriftIndicator.jsx` computes a per-corner
+  steward-override rate client-side from `GET /overrides` — a signal
+  that a corner's config or boundary geometry may be off, not a ruling
+  on any one finding. `ReviewControls.jsx` is the only path to
+  Confirm/Reject, and disappears once a steward has decided.
+
+  Verified for real, not just built: `npm run build` and `npm run lint`
+  (Oxlint) both pass clean, and the whole thing was smoke-tested end to
+  end against a live `uvicorn` instance in a headless browser — queue
+  load over REST, a finding submitted via `POST /events` while the page
+  was open appearing live over the WebSocket with no reload, and a full
+  Confirm click that correctly updated both the item's decided state and
+  the drift banner. (Caught one real bug doing this: `requirements.txt`
+  listed bare `uvicorn`, which has no WebSocket backend on its own —
+  `/ws/queue` 404'd with "No supported WebSocket library detected"
+  until `websockets` was added to `requirements.txt` directly.)
 
 - `src/eval/metrics.py` (Section 5.11) — `precision_recall` (recall is the
   metric that matters most here: "a missed violation is worse than a
@@ -130,9 +180,58 @@ agent, trust/calibration, the steward console) sits on top of:
   could produce `raw_path == output_path`, which would have pointed the
   re-encode step at reading and writing the same file.
 
+- `src/agent/` (Section 5.8, Tier 3) — the LLM reasoning pass over the
+  ambiguous slice (~120 items/race, never raw frames). `tools.py` exposes
+  the five read-only tools (`get_telemetry`, `get_neighbouring_cars`,
+  `get_session_precedents`, `get_event_notes`,
+  `get_driving_standards_guideline`) as raw schemas + a dispatch table,
+  bound per reasoning pass to an `AgentContext`. `precedent.py` is a
+  within-session nearest-neighbour store over a plain feature vector — no
+  training, no vector DB, just Euclidean distance over a handful of
+  floats. `reason.py` runs a two-phase call: an ordinary tool-use loop for
+  research, then one final call with no tools but a required JSON
+  response covering all six mandatory template fields (finding, case for,
+  case against, missing evidence, precedents, recommendation) — "this
+  template is a safety control, not a formatting preference." A response
+  that doesn't parse raises `MalformedAgentOutput` rather than silently
+  downgrading to a guessed verdict.
+
+  **Provider: Groq** (project choice, not the "Claude via API" the plan
+  text names) via its OpenAI-compatible chat-completions API — model
+  `llama-3.3-70b-versatile`, unverified against Groq's current catalog
+  (see the module docstring). Two real differences from an
+  Anthropic-shaped implementation, both handled explicitly rather than
+  papered over: tool call arguments arrive as a JSON *string*
+  (`json.loads`-ed per call, with malformed JSON caught and reported back
+  to the model rather than crashing the loop), and Groq's
+  `response_format={"type": "json_object"}` guarantees valid JSON but not
+  which keys are present — so the mandatory-template guarantee is
+  enforced by strict client-side validation after the call instead of a
+  server-side schema.
+
+  Validated two ways: 27 tests against a scripted fake client covering
+  tool dispatch, tool argument parsing, tool errors, the iteration cap,
+  and every malformed-output path, with no network calls — writing them
+  caught a real aliasing bug: `reason_about_finding` was mutating one
+  shared `messages` list throughout, so any earlier API call's recorded
+  arguments would appear (to a test, or a real logging/audit consumer)
+  mutated by everything that happened *after* that call — fixed by
+  passing a snapshot copy into every `create()` call. Plus one real
+  end-to-end call in `tests/test_agent_live.py`, skipped automatically
+  without `GROQ_API_KEY`. Unlike the Anthropic version this replaced,
+  that call could not be run even once from this sandbox — `api.groq.com`
+  is blocked by the environment's egress policy (confirmed directly: a
+  bare `curl` to it gets the same proxy rejection as the blocked
+  `fia.com`/`ergast.com` hosts elsewhere in this README) — so only the
+  skip path itself is confirmed, not a real pass. Needs to be run with a
+  reachable network and a funded key before this is trusted in
+  production.
+
 Run the tests: `pip install -r requirements.txt && python3 -m pytest`
-(128 tests, including the five Section 5.6 requires verbatim and the
-Section 5.1 round-trip acceptance criterion).
+(186 tests + 1 skipped without an API key, including the five Section 5.6
+requires verbatim and the Section 5.1 round-trip acceptance criterion).
+`console/` has its own toolchain — see `console/README.md` for how to run
+it against a live API.
 
 ### Where Tier 2's determinism ends on purpose
 
@@ -147,20 +246,29 @@ present measurement. The only Tier 2-level abstention is missing data.
 
 ## Not yet built
 
-- `src/telemetry/`, `src/vision/` (Tier 0) — perception. Nothing yet
-  produces a real `CarState` stream, a real `TrackFrame`/`Boundary`, or a
-  real `corner_of`/`lap_of` mapping — `events/localise.py` and
-  `track/build.py` are exercised with synthetic data in tests.
-  `model_confidence` in `trust/` is likewise a caller-supplied score in
-  tests — nothing produces one from real data yet.
-- `src/agent/` (Tier 3) — the both-sides LLM reasoning pass over the
-  ambiguous slice.
-- `console/` (Tier 5) — a real frontend for `src/api/`'s queue (`app.py`'s
-  Streamlit UI is the only steward-facing surface right now, and it
-  doesn't talk to the API — it evaluates and reviews findings directly,
-  in-process). `src/render/overlay.py` is built (above) but not wired
-  into either `app.py` or `src/api/` yet — nothing calls it end-to-end
-  with real detection output.
+- `src/telemetry/` (Tier 0, FastF1) — nothing produces a real telemetry
+  `CarState` stream; the telemetry branch in the architecture diagram
+  remains synthetic-data-only.
+- `src/vision/` as its own package (Section 5.3's proposed
+  `calibrate.py`/`detect.py`/`contact.py`/`project.py` layout) — the
+  underlying capability (homography, per-wheel kinematics, a real
+  `TrackFrame`/`Boundary` for a calibrated clip) is real now (see the CV
+  demo pipeline section below), just not organised as that package, and
+  still single-vehicle (no ByteTrack/persistent IDs) with a numeric
+  calibration form rather than an interactive click tool.
+  `model_confidence` in `trust/` is still a caller-supplied score —
+  nothing produces one from real data yet.
+- `src/agent/` is wired into `src/api/` now (above), but not into
+  `app.py` — the Streamlit demo still evaluates findings directly,
+  in-process, with no agent call.
+- `console/` is now built (above) and is the real frontend for
+  `src/api/`'s queue. `app.py`'s Streamlit UI remains a separate,
+  older surface that doesn't talk to the API — it evaluates and reviews
+  findings directly, in-process — and still needs reconciling with (or
+  retiring in favour of) `console/`. `src/render/overlay.py` is built
+  (above) but not wired into either `app.py` or `src/api/` yet — nothing
+  calls it end-to-end with real detection output, so neither
+  steward-facing surface can show an evidence clip yet.
 - `src/eval/scrape_fia.py` — parsing real FIA stewards' decision documents
   into ground truth. `src/eval/metrics.py` (above) is built and tested,
   just with no real labelled data to run it against yet.
@@ -186,26 +294,50 @@ rewired onto the real core above rather than patched in place:
   `tracker.update()` once per detected box per frame into one shared
   tracker, so multiple vehicles in frame corrupted each other's state;
   the confidence-threshold slider was wired up but never read.
-- Because this pipeline detects one reference point per vehicle (a
-  bounding-box bottom-centre), not per-wheel contact patches — exactly
-  what Section 5.3 calls "indefensible under questioning" — every
-  candidate event honestly carries `wheels_off_peak = None`. The same
-  `RuleEngine` that handles this everywhere else correctly reports
-  `INSUFFICIENT_EVIDENCE` for it, rather than the pipeline asserting a
-  violation it has no contact-patch evidence for.
-- `app.py` no longer shows any fabricated number. It runs detection into
-  a steward review queue — each candidate event shows its real citations
-  and `exceptions_evaluated` — and strikes move only when a steward clicks
-  **Confirm Violation**, via `EscalationEngine.increment_strike` and
-  `OverrideLog`, exactly as everywhere else in this project. The sidebar
-  states the pipeline's real limitations (illustrative zone, no contact
-  patches) instead of implying calibrated precision it doesn't have.
-  `tests/test_pipeline_demo_to_rules.py` checks the abstain behavior
-  end-to-end.
+- Without calibration, this pipeline detects one reference point per
+  vehicle (a bounding-box bottom-centre), not per-wheel contact patches —
+  exactly what Section 5.3 calls "indefensible under questioning" — so
+  every candidate event honestly carries `wheels_off_peak = None` and the
+  `RuleEngine` correctly reports `INSUFFICIENT_EVIDENCE`, rather than the
+  pipeline asserting a violation it has no contact-patch evidence for.
+- **With calibration, this is no longer permanent.** `src/calibration.py`
+  fits a real homography from operator-supplied point correspondences
+  (`cv2.findHomography`, no hardcoded clip-specific matrix);
+  `src/kinematics.py` turns one tracked point into four real wheel
+  positions from car centre + heading; `track/build.py`'s
+  `build_straight_segment_track` gives a calibrated clip a real
+  `TrackFrame`/`Boundary` (a straight local model, valid near the
+  calibrated segment only — reusing the same classes the rest of the
+  project uses, not a parallel implementation). `src/detector.py` feeds
+  the resulting `CarState`s (real `s`, `d`, and `wheel_d`) straight into
+  the actual `events.localise.localise_events` and `RuleEngine.evaluate`
+  — the same Tier 1/2 pipeline everywhere else, not a demo-only
+  reimplementation. `app.py`'s sidebar has a calibration form (point
+  correspondences read off the clip's first frame, plus the two points
+  defining the local track segment); once applied, findings can be real
+  `VIOLATION`s, not just abstention. Without it, the pipeline falls back
+  to the original single-point/zone behaviour above, unchanged.
+  `tests/test_detector_calibrated.py` proves both outcomes (a genuine
+  4-wheel violation and a genuine 2-wheels-legal no-violation) through
+  the real pipeline, not a mock.
+- `app.py` no longer shows any fabricated number in either mode. Strikes
+  move only when a steward clicks **Confirm Violation**, via
+  `EscalationEngine.increment_strike` and `OverrideLog`, exactly as
+  everywhere else in this project.
 
-`src/kinematics.py` and `src/calibration.py` were already dead code (never
-imported by `app.py` or `src/detector.py`) before this pass and remain so
-— left alone rather than wired in, since making them load-bearing would
-mean building the real per-clip calibration flow Section 5.3 describes
-(an interactive 4-point tool), not hardcoding one clip's homography as if
-it applied to any uploaded video.
+Writing `build_straight_segment_track`'s tests caught a real geometry bug:
+the fabricated closed loop's "return path" (TrackFrame needs one) was
+offset by a 5cm hairline, which silently won the nearest-segment search —
+flipping both sign and arc-length position — for any query more than
+2.5cm off the centreline, i.e. almost every real point. Fixed by offsetting
+the return path by 500m instead, comfortably past any realistic track
+half-width. See the regression test and the comment at
+`track/build.py`'s `_SLIVER_WIDTH_M`.
+
+Section 5.3's proposed file layout (`src/vision/calibrate.py`,
+`detect.py`, `contact.py`, `project.py`) still doesn't exist as its own
+package — this calibration/kinematics capability lives in the top-level
+demo modules instead. Also still true: single dominant-vehicle tracking
+(no per-car ID/ByteTrack), and `calibrate.py`'s spec describes an
+*interactive* click-to-pick tool; `app.py`'s form is numeric entry against
+a still-frame preview, not a click canvas.

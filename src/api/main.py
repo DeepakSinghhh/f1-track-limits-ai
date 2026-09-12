@@ -3,24 +3,34 @@ steward review queue built on the deterministic core above. This is what
 turns Tier 2 (rules), the escalation/audit layer, and Tier 4 (trust) into
 something an actual console can hit.
 
-Two things this API does NOT do, stated rather than hidden:
+Tier 3 (the agent) is now wired in, but only conditionally: create_app's
+agent_client is optional (None by default), so the API works exactly as
+before with no API key or network configured. When a client is supplied,
+the agent runs on the "ambiguous slice" -- items whose trust scalar falls
+below the same threshold decide_verdict uses to abstain -- and its
+both-sides reasoning is formatted into StewardItem.agent_reasoning using
+Section 5.8's own template. A failed or slow agent call never blocks or
+fails the finding submission itself: it's advisory, so its absence just
+means agent_reasoning stays None, same as if no client were configured.
 
-- Tier 3 (the both-sides LLM reasoning agent) and the render/overlay clip
-  export are not built yet, so StewardItem.agent_reasoning and
-  evidence_clip_path are always None here.
-- Real conformal prediction (Section 5.7) needs a calibration set of
-  labelled outcomes, which only exists once src/eval/scrape_fia.py is
-  built. Until then, every item's conformal_set is a singleton matching
-  the rule engine's own verdict — this API does not fabricate an
-  ambiguity signal it has no calibration data to support.
+One more honest gap, stated rather than hidden: real conformal prediction
+(Section 5.7) needs a calibration set of labelled outcomes, which only
+exists once src/eval/scrape_fia.py is built. Until then, every item's
+conformal_set is a singleton matching the rule engine's own verdict —
+this API does not fabricate an ambiguity signal it has no calibration
+data to support.
 """
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.encoders import jsonable_encoder
+from fastapi.middleware.cors import CORSMiddleware
 
+from src.agent.reason import AgentReasoning, reason_about_finding
+from src.agent.tools import AgentContext
 from src.audit.log import OverrideLog
 from src.config import load_event_config
 from src.rules.engine import RuleEngine
@@ -35,6 +45,12 @@ from src.trust.components import (
     precedent_consistency,
     rule_determinacy,
 )
+
+#: Section 5.8: the agent runs on items Tier 4 could not resolve with
+#: confidence -- the same scalar_threshold decide_verdict's own default
+#: uses to abstain, so "ambiguous slice" and "would otherwise abstain"
+#: are the same set of items here.
+AGENT_TRUST_THRESHOLD = 0.5
 
 
 @dataclass
@@ -89,11 +105,30 @@ def _serialize_item(item: StewardItem) -> dict:
     return jsonable_encoder(item)
 
 
+def _format_agent_reasoning(reasoning: AgentReasoning) -> str:
+    """Section 5.8's mandatory output template, verbatim field order."""
+    return (
+        f"FINDING: {reasoning.finding_restated}\n"
+        f"CASE FOR VIOLATION: {reasoning.case_for_violation}\n"
+        f"CASE AGAINST: {reasoning.case_against}\n"
+        f"MISSING EVIDENCE: {reasoning.missing_evidence}\n"
+        f"PRECEDENTS THIS SESSION: {reasoning.precedents_this_session}\n"
+        f"RECOMMENDATION: {reasoning.recommendation.value}"
+    )
+
+
 def create_app(
     config_path: str = "config/events/red_bull_ring_2023.yaml",
     override_log_path: str = "data/overrides/api_session.jsonl",
+    agent_client=None,
 ) -> FastAPI:
     app = FastAPI(title="Apex Assist Steward Console API")
+    # Permissive by design: this is a local demo API with no auth of its
+    # own, meant to be hit from console/ running on a different dev port.
+    # Tighten allow_origins before this is ever deployed anywhere real.
+    app.add_middleware(
+        CORSMiddleware, allow_origins=["*"], allow_credentials=False, allow_methods=["*"], allow_headers=["*"]
+    )
 
     config = load_event_config(config_path)
     app.state.config = config
@@ -104,10 +139,11 @@ def create_app(
     app.state.items: dict[str, StewardItem] = {}
     app.state.decisions: dict[str, str] = {}
     app.state.broadcaster = QueueBroadcaster()
+    app.state.agent_client = agent_client
 
     @app.get("/health")
     def health() -> dict:
-        return {"status": "ok", "circuit": config.circuit, "year": config.year}
+        return {"status": "ok", "circuit": config.circuit, "year": config.year, "agent_enabled": agent_client is not None}
 
     @app.post("/events")
     async def submit_event(payload: EvaluateRequest) -> StewardItem:
@@ -141,13 +177,26 @@ def create_app(
             conformal_set=conformal_set,
         )
 
-        final_verdict = decide_verdict(tier2_verdict, trust)
+        final_verdict = decide_verdict(tier2_verdict, trust, scalar_threshold=AGENT_TRUST_THRESHOLD)
+
+        agent_reasoning_text = None
+        if app.state.agent_client is not None and trust.scalar < AGENT_TRUST_THRESHOLD:
+            try:
+                agent_context = AgentContext(config=app.state.config)
+                reasoning = await asyncio.to_thread(
+                    reason_about_finding, app.state.agent_client, finding, agent_context
+                )
+                agent_reasoning_text = _format_agent_reasoning(reasoning)
+            except Exception:
+                # Advisory only: a failed or slow agent call must never
+                # block or fail the finding submission itself.
+                agent_reasoning_text = None
 
         item = StewardItem(
             finding=finding,
             trust=trust,
             verdict=final_verdict,
-            agent_reasoning=None,
+            agent_reasoning=agent_reasoning_text,
             evidence_clip_path=None,
             precedents=[],
             priority=trust.scalar,
