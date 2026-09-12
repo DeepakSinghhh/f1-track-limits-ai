@@ -3,3 +3,5 @@ opencv-python-headless
 pandas
 numpy
 ultralytics
+pyyaml
+pytest
