@@ -1,0 +1,15 @@
+# Lean requirements for deploying just src/api/main.py (the FastAPI backend
+# behind console/). Skips streamlit, ultralytics/torch, fastf1, pandas, and
+# pytest -- none of them are imported by src/api/main.py's own import chain
+# (verified by tracing its imports down through src/pipeline.py and
+# src/detector.py: the ultralytics import there is lazy, in
+# src/vision/detect.py:load_yolo_model, so it's only needed if a request to
+# POST /pipeline/run actually runs a real video through YOLO).
+fastapi
+uvicorn[standard]
+websockets
+httpx
+groq
+pyyaml
+numpy
+opencv-python-headless
