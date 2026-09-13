@@ -1,0 +1,12 @@
+# Lean requirements for deploying app.py (the Streamlit ingestion/pipeline
+# runner). Traced from app.py's own imports down through src/pipeline.py and
+# src/detector.py: ultralytics is needed here (unlike requirements-api.txt)
+# because app.py's "Run Detection Pipeline" button actually calls into YOLO;
+# fastapi/uvicorn/websockets/groq/fastf1/pytest are not on this import path.
+streamlit
+streamlit-image-coordinates
+opencv-python-headless
+numpy
+pyyaml
+httpx
+ultralytics
