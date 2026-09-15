@@ -21,16 +21,26 @@ VALID_AGENT_ANSWER = {
 
 
 @pytest.fixture
-def client(tmp_path):
-    app = create_app(config_path=CONFIG_PATH, override_log_path=str(tmp_path / "overrides.jsonl"))
+def clips_dir(tmp_path):
+    d = tmp_path / "clips"
+    d.mkdir()
+    return d
+
+
+@pytest.fixture
+def client(tmp_path, clips_dir):
+    app = create_app(
+        config_path=CONFIG_PATH, override_log_path=str(tmp_path / "overrides.jsonl"), clips_dir=str(clips_dir)
+    )
     return TestClient(app)
 
 
-def make_client_with_agent(tmp_path, responses):
+def make_client_with_agent(tmp_path, responses, clips_dir=None):
     fake_agent = FakeClient(responses)
-    app = create_app(
-        config_path=CONFIG_PATH, override_log_path=str(tmp_path / "overrides.jsonl"), agent_client=fake_agent
-    )
+    kwargs = dict(config_path=CONFIG_PATH, override_log_path=str(tmp_path / "overrides.jsonl"), agent_client=fake_agent)
+    if clips_dir is not None:
+        kwargs["clips_dir"] = str(clips_dir)
+    app = create_app(**kwargs)
     return TestClient(app), fake_agent
 
 
@@ -39,15 +49,40 @@ def event_payload(**overrides):
     return {"event": asdict(event)}
 
 
-def test_evidence_clip_path_is_passed_through_when_supplied(client):
+def test_evidence_clip_path_becomes_a_servable_url_when_the_file_exists(client, clips_dir):
+    (clips_dir / "evt-1.mp4").write_bytes(b"fake mp4 bytes")
     payload = event_payload(corner=1)
-    payload["evidence_clip_path"] = "data/clips/evt-1.mp4"
+    payload["evidence_clip_path"] = "data/clips/evt-1.mp4"  # the submitter's own local path
+
     item = client.post("/events", json=payload).json()
-    assert item["evidence_clip_path"] == "data/clips/evt-1.mp4"
+    assert item["evidence_clip_path"] == "/clips/evt-1.mp4"
+
+    clip_resp = client.get(item["evidence_clip_path"])
+    assert clip_resp.status_code == 200
+    assert clip_resp.content == b"fake mp4 bytes"
 
 
 def test_evidence_clip_path_defaults_to_none(client):
     item = client.post("/events", json=event_payload(corner=1)).json()
+    assert item["evidence_clip_path"] is None
+
+
+def test_evidence_clip_path_pointing_to_a_missing_file_becomes_none(client):
+    # never written into clips_dir -- the API must not hand console/ a link that 404s
+    payload = event_payload(corner=1)
+    payload["evidence_clip_path"] = "data/clips/never-rendered.mp4"
+    item = client.post("/events", json=payload).json()
+    assert item["evidence_clip_path"] is None
+
+
+def test_evidence_clip_path_traversal_attempt_is_neutralized(client, clips_dir):
+    # a real file *does* exist in clips_dir under a different name -- a
+    # path trying to escape it must not somehow resolve to that file or
+    # anything outside clips_dir, it must just miss
+    (clips_dir / "real.mp4").write_bytes(b"real clip")
+    payload = event_payload(corner=1)
+    payload["evidence_clip_path"] = "../../../../etc/passwd"
+    item = client.post("/events", json=payload).json()
     assert item["evidence_clip_path"] is None
 
 

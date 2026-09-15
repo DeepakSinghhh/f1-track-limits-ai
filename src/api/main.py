@@ -19,15 +19,28 @@ exists once src/eval/scrape_fia.py is built. Until then, every item's
 conformal_set is a singleton matching the rule engine's own verdict —
 this API does not fabricate an ambiguity signal it has no calibration
 data to support.
+
+Evidence clips: a submitting pipeline (app.py) renders a clip to local
+disk and sends its path along with the event. This API serves that same
+directory back out at GET /clips/<filename> (mounted via StaticFiles,
+which also handles Range requests -- needed for a <video> element to
+seek) and rewrites StewardItem.evidence_clip_path from the filesystem
+path it was given into that servable URL. This only works when the API
+and whoever ran the pipeline share a filesystem (true for this project's
+local/demo setup) -- a path that isn't actually inside clips_dir, or
+doesn't exist there, is dropped back to None rather than handed to
+console/ as a link that would 404.
 """
 from __future__ import annotations
 
 import asyncio
+import os
 from dataclasses import dataclass, field
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from src.agent.reason import format_agent_reasoning, reason_about_finding
 from src.agent.tools import AgentContext
@@ -111,9 +124,27 @@ def _serialize_item(item: StewardItem) -> dict:
     return jsonable_encoder(item)
 
 
+def _resolve_clip_url(submitted_path: str | None, clips_dir: str) -> str | None:
+    """A submitted evidence_clip_path is a filesystem path from whoever
+    ran the pipeline, not something console/ can fetch directly. Turns it
+    into a URL this API actually serves (GET /clips/<filename>), or None
+    if that file isn't really sitting in clips_dir -- os.path.basename
+    strips any directory component first, so a path like
+    "../../etc/passwd" resolves to just "passwd" and is treated like any
+    other filename that doesn't exist here, not a traversal risk.
+    """
+    if not submitted_path:
+        return None
+    filename = os.path.basename(submitted_path)
+    if not filename or not os.path.isfile(os.path.join(clips_dir, filename)):
+        return None
+    return f"/clips/{filename}"
+
+
 def create_app(
     config_path: str = "config/events/red_bull_ring_2023.yaml",
     override_log_path: str = "data/overrides/api_session.jsonl",
+    clips_dir: str = "data/clips",
     agent_client=None,
 ) -> FastAPI:
     app = FastAPI(title="Apex Assist Steward Console API")
@@ -134,6 +165,10 @@ def create_app(
     app.state.decisions: dict[str, str] = {}
     app.state.broadcaster = QueueBroadcaster()
     app.state.agent_client = agent_client
+    app.state.clips_dir = clips_dir
+
+    os.makedirs(clips_dir, exist_ok=True)
+    app.mount("/clips", StaticFiles(directory=clips_dir), name="clips")
 
     @app.get("/health")
     def health() -> dict:
@@ -191,7 +226,7 @@ def create_app(
             trust=trust,
             verdict=final_verdict,
             agent_reasoning=agent_reasoning_text,
-            evidence_clip_path=payload.evidence_clip_path,
+            evidence_clip_path=_resolve_clip_url(payload.evidence_clip_path, app.state.clips_dir),
             precedents=[],
             priority=trust.scalar,
         )

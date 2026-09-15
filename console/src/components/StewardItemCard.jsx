@@ -1,5 +1,6 @@
 import TrustBars from "./TrustBars";
 import ReviewControls from "./ReviewControls";
+import { getApiBaseUrl } from "../api";
 
 const VERDICT_LABEL = {
   violation: "Violation",
@@ -66,9 +67,11 @@ export default function StewardItemCard({ item, decision, reviewProps }) {
           ))}
         </div>
 
-        <div className="clip-placeholder">
-          {evidence_clip_path ? evidence_clip_path : "Evidence clip not attached to this finding."}
-        </div>
+        {evidence_clip_path ? (
+          <video className="evidence-clip" controls preload="metadata" src={`${getApiBaseUrl()}${evidence_clip_path}`} />
+        ) : (
+          <div className="clip-placeholder">Evidence clip not attached to this finding.</div>
+        )}
 
         <TrustBars trust={trust} />
 

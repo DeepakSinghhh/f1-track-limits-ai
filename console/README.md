@@ -79,11 +79,15 @@ confirm flow that correctly updates the drift banner).
 - No auth. The API has none either — this is a local/demo console, not
   a deployed one. CORS on the API is wide open (`allow_origins=["*"]`)
   for the same reason.
-- No evidence clip playback — `app.py` can populate `evidence_clip_path`
-  now, but it's a local filesystem path with no static-file route
-  serving it over HTTP, so the card still shows it as plain text rather
-  than rendering a player that would likely be broken for whoever's
-  actually viewing `console/`.
+- Evidence clip playback needs an H.264-capable environment. The card
+  renders a real `<video controls>` element and `src/api/`'s
+  `GET /clips/<file>` route genuinely serves the file (confirmed: 200,
+  `content-type: video/mp4`, `accept-ranges: bytes`) — but a clip
+  rendered where no `ffmpeg` (or an OpenCV build with a working H.264
+  encoder) is available comes back as raw `mp4v`, which Chrome's
+  `<video>` element refuses to decode (`MediaError.code === 4`,
+  confirmed directly in a real browser). A clip rendered somewhere with
+  a real H.264 encoder available will just play.
 - The drift indicator is computed from whatever `/overrides` currently
   holds in memory for this API process; it is not persisted across
   server restarts (neither is the queue itself — `app.state.items` is
