@@ -1,0 +1,7 @@
+{
+  "name": "@cuas/bots",
+  "private": true,
+  "type": "module",
+  "dependencies": { "@cuas/sim": "*" },
+  "scripts": { "run": "node src/cli.ts" }
+}

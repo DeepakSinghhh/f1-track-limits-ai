@@ -1,0 +1,135 @@
+# Drone and clutter classes (PLAN.md 3.2).
+#
+# Values are ILLUSTRATIVE training tiers, not performance claims. Where a
+# figure comes from the problem statement or an open source, `source:` says so
+# and `illustrative: false`. Tune freely; the sim and scorer read this file.
+#
+# thermal: IR brightness 0..1 (white-hot). acoustic_db: source level used by the
+# acoustic array. damage: asset damage on impact (assets start at 100).
+
+bird:
+  name: Bird
+  label: bird
+  hostile: false
+  size_m: 0.6
+  cruise_mps: 11
+  alt_m: [20, 160]
+  rcs_m2: 0.01          # same order as a small quadcopter -> radar false alarms
+  thermal: 0.55
+  acoustic_db: 0
+  link: none
+  nav: none
+  cost_inr: 0
+
+friendly_uav:
+  name: Friendly ISR UAV
+  label: friendly
+  hostile: false
+  size_m: 3.0
+  cruise_mps: 26
+  alt_m: [350, 600]
+  rcs_m2: 0.15
+  thermal: 0.6
+  acoustic_db: 62
+  link: rf
+  nav: gnss_ins
+  rf_band: Encrypted datalink (own forces)
+  iff: true
+  cost_inr: 5000000
+
+civil_drone:
+  name: Civil hobby quadcopter
+  label: civil
+  hostile: false
+  size_m: 0.35
+  cruise_mps: 6
+  alt_m: [30, 90]
+  rcs_m2: 0.01
+  thermal: 0.6
+  acoustic_db: 62
+  link: rf
+  nav: gnss
+  rf_band: 2.4 GHz Wi-Fi control
+  cost_inr: 60000
+
+recon_quad:
+  name: Recon quadcopter
+  label: recon
+  hostile: true
+  size_m: 0.4
+  cruise_mps: 12
+  alt_m: [120, 250]
+  rcs_m2: 0.012
+  thermal: 0.65
+  acoustic_db: 66
+  link: rf
+  nav: gnss
+  rf_band: 2.4 GHz digital control + video
+  cost_inr: 20000
+  source: PS 26247 cost-exchange example (a Rs 20,000 quadcopter)
+  illustrative: false
+
+fpv_rf:
+  name: FPV kamikaze (RF)
+  label: fpv
+  hostile: true
+  size_m: 0.25
+  cruise_mps: 28
+  terminal_mps: 40
+  alt_m: [25, 70]
+  rcs_m2: 0.008
+  thermal: 0.7
+  acoustic_db: 72
+  link: rf
+  nav: manual
+  rf_band: 5.8 GHz analog video
+  cost_inr: 35000
+  damage: 15
+
+fpv_fiber:
+  name: FPV kamikaze (fiber-optic)
+  label: fpv
+  hostile: true
+  size_m: 0.25
+  cruise_mps: 26
+  terminal_mps: 38
+  alt_m: [25, 70]
+  rcs_m2: 0.008
+  thermal: 0.7
+  acoustic_db: 72
+  link: fiber          # RF-silent and unjammable
+  nav: manual
+  cost_inr: 60000
+  damage: 15
+
+loitering_munition:
+  name: Fixed-wing loitering munition
+  label: loitering
+  hostile: true
+  size_m: 2.5
+  cruise_mps: 45
+  terminal_mps: 60
+  alt_m: [120, 350]
+  rcs_m2: 0.2
+  thermal: 0.95        # piston engine: very hot in IR
+  acoustic_db: 96      # loud: the acoustic array hears it kilometres out
+  link: none           # pre-programmed
+  nav: gnss_ins        # INS backup blunts GNSS spoofing
+  cost_inr: 2500000
+  damage: 40
+
+decoy:
+  name: Decoy (fixed-wing)
+  label: decoy
+  hostile: true
+  size_m: 2.0
+  cruise_mps: 42
+  terminal_mps: 50
+  alt_m: [120, 350]
+  rcs_m2: 0.2          # radar reflectors make it look like the real thing
+  thermal: 0.45        # small electric motor: cooler than a loitering munition
+  acoustic_db: 74      # and much quieter
+  link: none
+  nav: gnss
+  cost_inr: 250000
+  damage: 0

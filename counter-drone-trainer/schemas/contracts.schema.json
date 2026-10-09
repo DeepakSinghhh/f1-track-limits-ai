@@ -1,0 +1,1576 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Contracts",
+  "type": "object",
+  "properties": {
+    "Catalogue": {
+      "$ref": "#/$defs/Catalogue"
+    },
+    "Scenario": {
+      "$ref": "#/$defs/Scenario"
+    },
+    "SessionResult": {
+      "$ref": "#/$defs/SessionResult"
+    },
+    "SimEvent": {
+      "$ref": "#/$defs/SimEvent"
+    },
+    "TruthEntity": {
+      "$ref": "#/$defs/TruthEntity"
+    },
+    "Replay": {
+      "$ref": "#/$defs/Replay"
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "Asset": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        },
+        "pos": {
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array",
+          "items": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "additionalItems": false
+        },
+        "value": {
+          "type": "number"
+        },
+        "radius_m": {
+          "default": 60,
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "type",
+        "pos",
+        "value",
+        "radius_m"
+      ],
+      "title": "Asset",
+      "type": "object"
+    },
+    "Catalogue": {
+      "additionalProperties": false,
+      "properties": {
+        "drones": {
+          "additionalProperties": {
+            "$ref": "#/$defs/DroneSpec"
+          },
+          "propertyNames": {
+            "$ref": "#/$defs/DroneClass"
+          },
+          "type": "object"
+        },
+        "effectors": {
+          "additionalProperties": {
+            "$ref": "#/$defs/EffectorSpec"
+          },
+          "type": "object"
+        },
+        "sensors": {
+          "additionalProperties": {
+            "$ref": "#/$defs/SensorSpec"
+          },
+          "type": "object"
+        },
+        "effect_matrix": {
+          "additionalProperties": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "propertyNames": {
+              "$ref": "#/$defs/DroneClass"
+            },
+            "type": "object"
+          },
+          "propertyNames": {
+            "$ref": "#/$defs/EffectKind"
+          },
+          "type": "object"
+        },
+        "laser_dwell": {
+          "additionalProperties": {
+            "type": "number"
+          },
+          "propertyNames": {
+            "$ref": "#/$defs/DroneClass"
+          },
+          "type": "object"
+        },
+        "weather": {
+          "additionalProperties": {
+            "$ref": "#/$defs/WeatherEffect"
+          },
+          "propertyNames": {
+            "$ref": "#/$defs/Weather"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "drones",
+        "effectors",
+        "sensors",
+        "effect_matrix",
+        "laser_dwell",
+        "weather"
+      ],
+      "title": "Catalogue",
+      "type": "object"
+    },
+    "Clutter": {
+      "additionalProperties": false,
+      "properties": {
+        "bird_flocks": {
+          "default": 0,
+          "type": "integer"
+        },
+        "birds_per_flock": {
+          "default": [
+            3,
+            7
+          ],
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array",
+          "items": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "additionalItems": false
+        },
+        "friendly_flights": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/FriendlyFlight"
+          },
+          "type": "array"
+        },
+        "civil_drones": {
+          "default": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "bird_flocks",
+        "birds_per_flock",
+        "friendly_flights",
+        "civil_drones"
+      ],
+      "title": "Clutter",
+      "type": "object"
+    },
+    "ControlLink": {
+      "enum": [
+        "rf",
+        "fiber",
+        "none"
+      ],
+      "title": "ControlLink",
+      "type": "string"
+    },
+    "Corridor": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "points": {
+          "items": {
+            "maxItems": 2,
+            "minItems": 2,
+            "type": "array",
+            "items": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "additionalItems": false
+          },
+          "type": "array"
+        },
+        "alt_m": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "points",
+        "alt_m"
+      ],
+      "title": "Corridor",
+      "type": "object"
+    },
+    "Difficulty": {
+      "additionalProperties": false,
+      "properties": {
+        "level": {
+          "default": 0.3,
+          "type": "number"
+        },
+        "focus": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Skill"
+          },
+          "type": "array"
+        },
+        "load": {
+          "additionalProperties": {
+            "type": "number"
+          },
+          "default": {},
+          "propertyNames": {
+            "$ref": "#/$defs/Skill"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "level",
+        "focus",
+        "load"
+      ],
+      "title": "Difficulty",
+      "type": "object"
+    },
+    "DroneClass": {
+      "enum": [
+        "bird",
+        "friendly_uav",
+        "civil_drone",
+        "recon_quad",
+        "fpv_rf",
+        "fpv_fiber",
+        "loitering_munition",
+        "decoy"
+      ],
+      "title": "DroneClass",
+      "type": "string"
+    },
+    "DroneSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "label": {
+          "$ref": "#/$defs/Label"
+        },
+        "hostile": {
+          "type": "boolean"
+        },
+        "size_m": {
+          "type": "number"
+        },
+        "cruise_mps": {
+          "type": "number"
+        },
+        "terminal_mps": {
+          "default": 0,
+          "type": "number"
+        },
+        "alt_m": {
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array",
+          "items": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "additionalItems": false
+        },
+        "rcs_m2": {
+          "type": "number"
+        },
+        "thermal": {
+          "description": "IR brightness 0..1",
+          "maximum": 1,
+          "minimum": 0,
+          "type": "number"
+        },
+        "acoustic_db": {
+          "type": "number"
+        },
+        "link": {
+          "$ref": "#/$defs/ControlLink"
+        },
+        "nav": {
+          "$ref": "#/$defs/Nav"
+        },
+        "rf_band": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "iff": {
+          "default": false,
+          "type": "boolean"
+        },
+        "cost_inr": {
+          "type": "integer"
+        },
+        "damage": {
+          "default": 0,
+          "type": "number"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "illustrative": {
+          "default": true,
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name",
+        "label",
+        "hostile",
+        "size_m",
+        "cruise_mps",
+        "terminal_mps",
+        "alt_m",
+        "rcs_m2",
+        "thermal",
+        "acoustic_db",
+        "link",
+        "nav",
+        "rf_band",
+        "iff",
+        "cost_inr",
+        "damage",
+        "source",
+        "illustrative"
+      ],
+      "title": "DroneSpec",
+      "type": "object"
+    },
+    "EffectKind": {
+      "enum": [
+        "rf_jam",
+        "gnss_spoof",
+        "laser",
+        "rocket",
+        "missile",
+        "sam",
+        "gun"
+      ],
+      "title": "EffectKind",
+      "type": "string"
+    },
+    "EffectorPlacement": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        },
+        "pos": {
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array",
+          "items": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "additionalItems": false
+        },
+        "ammo": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "id",
+        "type",
+        "pos",
+        "ammo"
+      ],
+      "title": "EffectorPlacement",
+      "type": "object"
+    },
+    "EffectorSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/EffectKind"
+        },
+        "kill": {
+          "enum": [
+            "soft",
+            "hard"
+          ],
+          "type": "string"
+        },
+        "range_m": {
+          "type": "number"
+        },
+        "cost_inr": {
+          "description": "per activation (soft kill) or per round (hard kill)",
+          "type": "integer"
+        },
+        "ammo": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "rounds_per_shot": {
+          "default": 1,
+          "type": "integer"
+        },
+        "sector_half_deg": {
+          "default": 0,
+          "type": "number"
+        },
+        "duration_s": {
+          "default": 0,
+          "type": "number"
+        },
+        "exposure_s": {
+          "default": 0,
+          "type": "number"
+        },
+        "dwell_s": {
+          "default": 0,
+          "type": "number"
+        },
+        "slew_s": {
+          "default": 1,
+          "type": "number"
+        },
+        "speed_mps": {
+          "default": 0,
+          "type": "number"
+        },
+        "blast_m": {
+          "default": 0,
+          "type": "number"
+        },
+        "pk": {
+          "default": 0,
+          "type": "number"
+        },
+        "cycle_s": {
+          "default": 0,
+          "type": "number"
+        },
+        "needs_los": {
+          "default": true,
+          "type": "boolean"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "illustrative": {
+          "default": true,
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name",
+        "kind",
+        "kill",
+        "range_m",
+        "cost_inr",
+        "ammo",
+        "rounds_per_shot",
+        "sector_half_deg",
+        "duration_s",
+        "exposure_s",
+        "dwell_s",
+        "slew_s",
+        "speed_mps",
+        "blast_m",
+        "pk",
+        "cycle_s",
+        "needs_los",
+        "source",
+        "illustrative"
+      ],
+      "title": "EffectorSpec",
+      "type": "object"
+    },
+    "Environment": {
+      "additionalProperties": false,
+      "properties": {
+        "time_of_day": {
+          "$ref": "#/$defs/TimeOfDay"
+        },
+        "weather": {
+          "$ref": "#/$defs/Weather"
+        },
+        "ambient_noise_db": {
+          "default": 45,
+          "type": "number"
+        }
+      },
+      "required": [
+        "time_of_day",
+        "weather",
+        "ambient_noise_db"
+      ],
+      "title": "Environment",
+      "type": "object"
+    },
+    "EventType": {
+      "enum": [
+        "session_start",
+        "session_end",
+        "track_new",
+        "track_lost",
+        "track_regained",
+        "hook",
+        "classify",
+        "ai_suggestion",
+        "decision",
+        "authority_request",
+        "authority_granted",
+        "engage_order",
+        "engage_blocked",
+        "engage_result",
+        "cease",
+        "neutralised",
+        "link_lost",
+        "diverted",
+        "leaker",
+        "exited",
+        "expended",
+        "recon_complete",
+        "collateral",
+        "friendly_affected",
+        "sensor_state",
+        "camera",
+        "camera_designate",
+        "pause",
+        "resume"
+      ],
+      "title": "EventType",
+      "type": "string"
+    },
+    "FriendlyFlight": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "corridor": {
+          "type": "string"
+        },
+        "t": {
+          "type": "number"
+        },
+        "iff": {
+          "default": true,
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "corridor",
+        "t",
+        "iff"
+      ],
+      "title": "FriendlyFlight",
+      "type": "object"
+    },
+    "Label": {
+      "description": "What the trainee can call a track (Classify step).",
+      "enum": [
+        "bird",
+        "friendly",
+        "civil",
+        "recon",
+        "fpv",
+        "loitering",
+        "decoy",
+        "unknown"
+      ],
+      "title": "Label",
+      "type": "string"
+    },
+    "MapSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "terrain_seed": {
+          "type": "integer"
+        },
+        "terrain": {
+          "enum": [
+            "plains",
+            "foothills"
+          ],
+          "type": "string"
+        },
+        "size_m": {
+          "default": 16000,
+          "type": "number"
+        },
+        "assets": {
+          "items": {
+            "$ref": "#/$defs/Asset"
+          },
+          "type": "array"
+        },
+        "no_fire_zones": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/NoFireZone"
+          },
+          "type": "array"
+        },
+        "corridors": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Corridor"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "terrain_seed",
+        "terrain",
+        "size_m",
+        "assets",
+        "no_fire_zones",
+        "corridors"
+      ],
+      "title": "MapSpec",
+      "type": "object"
+    },
+    "Nav": {
+      "enum": [
+        "gnss",
+        "gnss_ins",
+        "manual",
+        "none"
+      ],
+      "title": "Nav",
+      "type": "string"
+    },
+    "NoFireZone": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "center": {
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array",
+          "items": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "additionalItems": false
+        },
+        "radius_m": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "center",
+        "radius_m"
+      ],
+      "title": "NoFireZone",
+      "type": "object"
+    },
+    "Outcome": {
+      "enum": [
+        "active",
+        "neutralised",
+        "link_lost",
+        "diverted",
+        "leaked",
+        "exited",
+        "expended"
+      ],
+      "title": "Outcome",
+      "type": "string"
+    },
+    "Replay": {
+      "additionalProperties": false,
+      "properties": {
+        "dt": {
+          "type": "number"
+        },
+        "entities": {
+          "items": {
+            "$ref": "#/$defs/ReplayEntity"
+          },
+          "type": "array"
+        },
+        "tracks": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "effectors": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "frames": {
+          "items": {
+            "$ref": "#/$defs/ReplayFrame"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "dt",
+        "entities",
+        "tracks",
+        "effectors",
+        "frames"
+      ],
+      "title": "Replay",
+      "type": "object"
+    },
+    "ReplayEntity": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "cls": {
+          "$ref": "#/$defs/DroneClass"
+        }
+      },
+      "required": [
+        "id",
+        "cls"
+      ],
+      "title": "ReplayEntity",
+      "type": "object"
+    },
+    "ReplayFrame": {
+      "additionalProperties": false,
+      "properties": {
+        "t": {
+          "type": "number"
+        },
+        "e": {
+          "description": "per entity: index, x, y, z, state(0 active,1 down)",
+          "items": {
+            "type": "number"
+          },
+          "type": "array"
+        },
+        "tr": {
+          "description": "per track: index, x, y, displayed, label idx, decision idx, hooked",
+          "items": {
+            "type": "number"
+          },
+          "type": "array"
+        },
+        "cam": {
+          "description": "az_deg, el_deg, fov_deg, mode(0 eo,1 ir)",
+          "items": {
+            "type": "number"
+          },
+          "type": "array"
+        },
+        "fx": {
+          "description": "per active effector: effector idx, track idx",
+          "items": {
+            "type": "number"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "t",
+        "e",
+        "tr",
+        "cam",
+        "fx"
+      ],
+      "title": "ReplayFrame",
+      "type": "object"
+    },
+    "Roe": {
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "$ref": "#/$defs/RoeState"
+        },
+        "authority_delay_s": {
+          "default": 8,
+          "type": "number"
+        }
+      },
+      "required": [
+        "state",
+        "authority_delay_s"
+      ],
+      "title": "Roe",
+      "type": "object"
+    },
+    "RoeState": {
+      "enum": [
+        "weapons_free",
+        "weapons_tight",
+        "weapons_hold"
+      ],
+      "title": "RoeState",
+      "type": "string"
+    },
+    "Scenario": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "seed": {
+          "type": "integer"
+        },
+        "mode": {
+          "enum": [
+            "scripted",
+            "procedural",
+            "benchmark",
+            "drill"
+          ],
+          "type": "string"
+        },
+        "briefing": {
+          "type": "string"
+        },
+        "intel": {
+          "default": "",
+          "type": "string"
+        },
+        "duration_s": {
+          "default": 420,
+          "type": "number"
+        },
+        "map": {
+          "$ref": "#/$defs/MapSpec"
+        },
+        "environment": {
+          "$ref": "#/$defs/Environment"
+        },
+        "roe": {
+          "$ref": "#/$defs/Roe"
+        },
+        "sensors": {
+          "items": {
+            "$ref": "#/$defs/SensorPlacement"
+          },
+          "type": "array"
+        },
+        "effectors": {
+          "items": {
+            "$ref": "#/$defs/EffectorPlacement"
+          },
+          "type": "array"
+        },
+        "waves": {
+          "items": {
+            "$ref": "#/$defs/Wave"
+          },
+          "type": "array"
+        },
+        "clutter": {
+          "$ref": "#/$defs/Clutter",
+          "default": {
+            "bird_flocks": 0,
+            "birds_per_flock": [
+              3.0,
+              7.0
+            ],
+            "friendly_flights": [],
+            "civil_drones": 0
+          }
+        },
+        "difficulty": {
+          "$ref": "#/$defs/Difficulty",
+          "default": {
+            "level": 0.3,
+            "focus": [],
+            "load": {}
+          }
+        },
+        "tags": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "fingerprint": {
+          "default": "",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "seed",
+        "mode",
+        "briefing",
+        "intel",
+        "duration_s",
+        "map",
+        "environment",
+        "roe",
+        "sensors",
+        "effectors",
+        "waves",
+        "clutter",
+        "difficulty",
+        "tags",
+        "fingerprint"
+      ],
+      "title": "Scenario",
+      "type": "object"
+    },
+    "SensorEvent": {
+      "additionalProperties": false,
+      "properties": {
+        "t": {
+          "type": "number"
+        },
+        "state": {
+          "enum": [
+            "down",
+            "degraded"
+          ],
+          "type": "string"
+        },
+        "for_s": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "t",
+        "state",
+        "for_s"
+      ],
+      "title": "SensorEvent",
+      "type": "object"
+    },
+    "SensorPlacement": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        },
+        "pos": {
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array",
+          "items": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "additionalItems": false
+        },
+        "events": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/SensorEvent"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "type",
+        "pos",
+        "events"
+      ],
+      "title": "SensorPlacement",
+      "type": "object"
+    },
+    "SensorSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "type": {
+          "$ref": "#/$defs/SensorType"
+        },
+        "range_m": {
+          "type": "number"
+        },
+        "update_s": {
+          "type": "number"
+        },
+        "params": {
+          "additionalProperties": {
+            "type": "number"
+          },
+          "default": {},
+          "type": "object"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "illustrative": {
+          "default": true,
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name",
+        "type",
+        "range_m",
+        "update_s",
+        "params",
+        "source",
+        "illustrative"
+      ],
+      "title": "SensorSpec",
+      "type": "object"
+    },
+    "SensorType": {
+      "enum": [
+        "radar",
+        "rf",
+        "acoustic",
+        "eoir",
+        "iff"
+      ],
+      "title": "SensorType",
+      "type": "string"
+    },
+    "SessionResult": {
+      "additionalProperties": false,
+      "properties": {
+        "scenario_id": {
+          "type": "string"
+        },
+        "seed": {
+          "type": "integer"
+        },
+        "actor": {
+          "enum": [
+            "trainee",
+            "bot"
+          ],
+          "type": "string"
+        },
+        "bot": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "duration_s": {
+          "type": "number"
+        },
+        "ended_reason": {
+          "enum": [
+            "all_resolved",
+            "time_up",
+            "aborted"
+          ],
+          "type": "string"
+        },
+        "assets_health": {
+          "additionalProperties": {
+            "type": "number"
+          },
+          "type": "object"
+        },
+        "aid_mode": {
+          "default": "off",
+          "enum": [
+            "off",
+            "honest",
+            "unreliable"
+          ],
+          "type": "string"
+        },
+        "events": {
+          "items": {
+            "$ref": "#/$defs/SimEvent"
+          },
+          "type": "array"
+        },
+        "truth": {
+          "items": {
+            "$ref": "#/$defs/TruthEntity"
+          },
+          "type": "array"
+        },
+        "replay": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Replay"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "scenario_id",
+        "seed",
+        "actor",
+        "bot",
+        "duration_s",
+        "ended_reason",
+        "assets_health",
+        "aid_mode",
+        "events",
+        "truth",
+        "replay"
+      ],
+      "title": "SessionResult",
+      "type": "object"
+    },
+    "SimEvent": {
+      "additionalProperties": false,
+      "properties": {
+        "t": {
+          "type": "number"
+        },
+        "type": {
+          "$ref": "#/$defs/EventType"
+        },
+        "actor": {
+          "enum": [
+            "trainee",
+            "sim",
+            "bot"
+          ],
+          "type": "string"
+        },
+        "track": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "entity": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "data": {
+          "additionalProperties": true,
+          "default": {},
+          "type": "object"
+        }
+      },
+      "required": [
+        "t",
+        "type",
+        "actor",
+        "track",
+        "entity",
+        "data"
+      ],
+      "title": "SimEvent",
+      "type": "object"
+    },
+    "Skill": {
+      "enum": [
+        "S1",
+        "S2",
+        "S3",
+        "S4",
+        "S5",
+        "S6",
+        "S7",
+        "S8"
+      ],
+      "title": "Skill",
+      "type": "string"
+    },
+    "Tactic": {
+      "enum": [
+        "direct",
+        "split_flank",
+        "decoy_first",
+        "time_on_target",
+        "terrain_masked",
+        "recon_then_strike"
+      ],
+      "title": "Tactic",
+      "type": "string"
+    },
+    "TimeOfDay": {
+      "enum": [
+        "day",
+        "dusk",
+        "night"
+      ],
+      "title": "TimeOfDay",
+      "type": "string"
+    },
+    "TruthEntity": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "cls": {
+          "$ref": "#/$defs/DroneClass"
+        },
+        "label": {
+          "$ref": "#/$defs/Label"
+        },
+        "hostile": {
+          "type": "boolean"
+        },
+        "link": {
+          "$ref": "#/$defs/ControlLink"
+        },
+        "nav": {
+          "$ref": "#/$defs/Nav"
+        },
+        "cost_inr": {
+          "type": "integer"
+        },
+        "damage": {
+          "type": "number"
+        },
+        "wave": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "tactic": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Tactic"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "iff": {
+          "default": false,
+          "type": "boolean"
+        },
+        "track": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "t_spawn": {
+          "type": "number"
+        },
+        "t_first_displayed": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "outcome": {
+          "$ref": "#/$defs/Outcome"
+        },
+        "outcome_t": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "outcome_by": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "id",
+        "cls",
+        "label",
+        "hostile",
+        "link",
+        "nav",
+        "cost_inr",
+        "damage",
+        "wave",
+        "tactic",
+        "iff",
+        "track",
+        "t_spawn",
+        "t_first_displayed",
+        "outcome",
+        "outcome_t",
+        "outcome_by"
+      ],
+      "title": "TruthEntity",
+      "type": "object"
+    },
+    "Wave": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "t": {
+          "type": "number"
+        },
+        "tactic": {
+          "$ref": "#/$defs/Tactic"
+        },
+        "bearing_deg": {
+          "type": "number"
+        },
+        "spread_deg": {
+          "default": 20,
+          "type": "number"
+        },
+        "range_m": {
+          "default": 7500,
+          "type": "number"
+        },
+        "target": {
+          "type": "string"
+        },
+        "units": {
+          "items": {
+            "$ref": "#/$defs/WaveUnit"
+          },
+          "type": "array"
+        },
+        "arrival_s": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "id",
+        "t",
+        "tactic",
+        "bearing_deg",
+        "spread_deg",
+        "range_m",
+        "target",
+        "units",
+        "arrival_s"
+      ],
+      "title": "Wave",
+      "type": "object"
+    },
+    "WaveUnit": {
+      "additionalProperties": false,
+      "properties": {
+        "cls": {
+          "$ref": "#/$defs/DroneClass"
+        },
+        "n": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "cls",
+        "n"
+      ],
+      "title": "WaveUnit",
+      "type": "object"
+    },
+    "Weather": {
+      "enum": [
+        "clear",
+        "haze",
+        "rain",
+        "fog"
+      ],
+      "title": "Weather",
+      "type": "string"
+    },
+    "WeatherEffect": {
+      "additionalProperties": false,
+      "properties": {
+        "radar": {
+          "type": "number"
+        },
+        "laser_dwell": {
+          "type": "number"
+        },
+        "laser_ok": {
+          "type": "boolean"
+        },
+        "ambient_db": {
+          "type": "number"
+        },
+        "eo_vis_km": {
+          "type": "number"
+        },
+        "ir_vis_km": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "radar",
+        "laser_dwell",
+        "laser_ok",
+        "ambient_db",
+        "eo_vis_km",
+        "ir_vis_km"
+      ],
+      "title": "WeatherEffect",
+      "type": "object"
+    }
+  }
+}

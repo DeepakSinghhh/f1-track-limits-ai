@@ -1,0 +1,86 @@
+# How well each effect works on each class (PLAN.md 3.2), 0..1.
+# Soft-kill rows answer "can this work at all"; hard-kill rows multiply the
+# effector's base pk. Cost is NOT here: the scorer handles cost-exchange.
+
+effect_matrix:
+  rf_jam:
+    bird: 0
+    friendly_uav: 0.95
+    civil_drone: 0.95
+    recon_quad: 0.95
+    fpv_rf: 0.95
+    fpv_fiber: 0          # fiber-optic: nothing to jam
+    loitering_munition: 0 # pre-programmed: nothing to jam
+    decoy: 0
+  gnss_spoof:
+    bird: 0
+    friendly_uav: 0.2
+    civil_drone: 0.7
+    recon_quad: 0.3       # a pilot can fly it home by video
+    fpv_rf: 0             # manually flown
+    fpv_fiber: 0
+    loitering_munition: 0.35  # INS backup
+    decoy: 0.9            # GNSS-only waypoint follower
+  laser:
+    bird: 1
+    friendly_uav: 1
+    civil_drone: 1
+    recon_quad: 1
+    fpv_rf: 1
+    fpv_fiber: 1
+    loitering_munition: 1
+    decoy: 1
+  rocket:
+    bird: 1
+    friendly_uav: 1
+    civil_drone: 1
+    recon_quad: 1
+    fpv_rf: 1
+    fpv_fiber: 1
+    loitering_munition: 1
+    decoy: 1
+  missile:
+    bird: 0.6
+    friendly_uav: 1
+    civil_drone: 0.85
+    recon_quad: 0.85
+    fpv_rf: 0.8
+    fpv_fiber: 0.8
+    loitering_munition: 1
+    decoy: 1
+  sam:
+    bird: 0.5
+    friendly_uav: 1
+    civil_drone: 0.7
+    recon_quad: 0.75
+    fpv_rf: 0.7
+    fpv_fiber: 0.7
+    loitering_munition: 1
+    decoy: 1
+  gun:
+    bird: 0.8
+    friendly_uav: 0.9
+    civil_drone: 1
+    recon_quad: 1
+    fpv_rf: 0.6           # small and fast
+    fpv_fiber: 0.6
+    loitering_munition: 0.8
+    decoy: 0.9
+
+# Laser dwell multiplier per class (bigger airframes take longer to burn through).
+laser_dwell:
+  bird: 0.6
+  friendly_uav: 2.0
+  civil_drone: 1.0
+  recon_quad: 1.0
+  fpv_rf: 1.0
+  fpv_fiber: 1.0
+  loitering_munition: 2.2
+  decoy: 1.6
+
+# Weather effects on sensors and effectors.
+weather:
+  clear: { radar: 1.0,  laser_dwell: 1.0, laser_ok: true,  ambient_db: 0, eo_vis_km: 10,  ir_vis_km: 10 }
+  haze:  { radar: 1.0,  laser_dwell: 1.4, laser_ok: true,  ambient_db: 0, eo_vis_km: 4,   ir_vis_km: 7 }
+  rain:  { radar: 0.75, laser_dwell: 1.8, laser_ok: true,  ambient_db: 8, eo_vis_km: 3,   ir_vis_km: 4 }
+  fog:   { radar: 0.95, laser_dwell: 3.0, laser_ok: false, ambient_db: 0, eo_vis_km: 0.8, ir_vis_km: 1.5 }

@@ -1,0 +1,123 @@
+# Effectors (PLAN.md 3.2). cost_inr is per activation for soft kill and per
+# round for hard kill. Figures marked illustrative are training tiers only.
+
+d4_rf_jammer:
+  name: D4 RF jammer
+  kind: rf_jam
+  kill: soft
+  range_m: 3000
+  sector_half_deg: 15     # jams a whole sector: friendly drones inside it lose link too
+  duration_s: 10
+  exposure_s: 2
+  slew_s: 0.5
+  cost_inr: 500
+  needs_los: false
+  source: PS 26247 - DRDO D4 can detect and jam micro-drones up to 3 km
+  illustrative: false
+
+d4_gnss_spoofer:
+  name: D4 GNSS jam/spoof
+  kind: gnss_spoof
+  kill: soft
+  range_m: 3000
+  sector_half_deg: 20
+  duration_s: 15
+  exposure_s: 4
+  slew_s: 0.5
+  cost_inr: 500
+  needs_los: false
+
+d4_laser:
+  name: D4 laser
+  kind: laser
+  kill: hard
+  range_m: 1250
+  dwell_s: 3.0            # base dwell on a small quadcopter, scaled per class and weather
+  slew_s: 1.5
+  cost_inr: 1000
+  needs_los: true
+  source: PS 26247 - D4 can laser a target at 1-1.25 km
+  illustrative: false
+
+bhargavastra_rocket:
+  name: Bhargavastra micro-rockets
+  kind: rocket
+  kill: hard
+  range_m: 2500
+  ammo: 16
+  rounds_per_shot: 2
+  speed_mps: 600
+  blast_m: 25             # area effect: one salvo can take out a tight group
+  pk: 0.8
+  slew_s: 2
+  cost_inr: 150000
+  needs_los: true
+
+bhargavastra_missile:
+  name: Bhargavastra micro-missile
+  kind: missile
+  kill: hard
+  range_m: 3000
+  ammo: 4
+  speed_mps: 450
+  pk: 0.9
+  slew_s: 2
+  cost_inr: 1000000
+  needs_los: true
+
+sam_medium:
+  name: Medium-range SAM (Rs-crore class)
+  kind: sam
+  kill: hard
+  range_m: 15000
+  ammo: 4
+  speed_mps: 900
+  pk: 0.95
+  slew_s: 3
+  cost_inr: 15000000      # the cost-exchange trap: always works, ruinously expensive
+  needs_los: false
+
+l70:
+  name: L-70 40 mm gun
+  kind: gun
+  kill: hard
+  range_m: 3000
+  ammo: 240
+  rounds_per_shot: 6
+  pk: 0.4
+  cycle_s: 1.5
+  speed_mps: 1000
+  slew_s: 1.5
+  cost_inr: 25000
+  needs_los: true
+  source: Used in Op Sindoor per PS 26247 (Patrika); performance figures illustrative
+
+zu23:
+  name: ZU-23-2 23 mm gun
+  kind: gun
+  kill: hard
+  range_m: 1800
+  ammo: 800
+  rounds_per_shot: 20
+  pk: 0.3
+  cycle_s: 1.2
+  speed_mps: 970
+  slew_s: 1.2
+  cost_inr: 1500
+  needs_los: true
+  source: Used in Op Sindoor per PS 26247 (Patrika); performance figures illustrative
+
+shilka:
+  name: Shilka (ZSU-23-4)
+  kind: gun
+  kill: hard
+  range_m: 2500
+  ammo: 1000
+  rounds_per_shot: 30
+  pk: 0.45
+  cycle_s: 1.2
+  speed_mps: 1000
+  slew_s: 1.0
+  cost_inr: 2000
+  needs_los: true
+  source: Used in Op Sindoor per PS 26247 (Patrika); performance figures illustrative

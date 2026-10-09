@@ -1,0 +1,53 @@
+# Sensors (PLAN.md 6.4). Each one has the weakness the PS lists, modelled
+# explicitly so degraded-sensor scenarios are visible on screen.
+
+d4_radar:
+  name: D4 detection radar
+  type: radar
+  range_m: 10000
+  update_s: 1.0
+  params:
+    r1_m: 8000            # 50% detection range against a 1 m2 target; scales with RCS^(1/4)
+    mti_mps: 1.5          # Doppler/MTI filter: slower radial speed is filtered as clutter (hovering drones vanish)
+    sigma_range_m: 10
+    sigma_az_deg: 0.4
+    sigma_el_deg: 0.8
+    mast_m: 8
+
+rf_detector:
+  name: RF detector
+  type: rf
+  range_m: 5000
+  update_s: 0.5
+  params:
+    sigma_az_deg: 3       # bearing only; blind to fiber-optic and pre-programmed drones
+    pd: 0.9
+
+acoustic_array:
+  name: Acoustic array
+  type: acoustic
+  range_m: 4000
+  update_s: 1.0
+  params:
+    ref_m: 10             # detection range = ref_m * 10^((source_db - ambient_db) / 20)
+    sigma_az_deg: 6
+    pd: 0.8
+
+eoir_turret:
+  name: EO/IR turret
+  type: eoir
+  range_m: 8000
+  update_s: 0
+  params:
+    slew_dps: 40
+    fov_max_deg: 30
+    fov_min_deg: 0.5
+    mast_m: 10
+    lrf_sigma_m: 2        # laser rangefinder: a camera lock gives a precise position
+
+iff_interrogator:
+  name: IFF interrogator
+  type: iff
+  range_m: 8000
+  update_s: 2.0
+  params: {}
